@@ -5,7 +5,6 @@ import numpy as np
 import json
 import os
 from datetime import datetime
-from streamlit_autorefresh import st_autorefresh
 
 # ==================== GCJ-02 转 WGS84 ====================
 def gcj02_to_wgs84(lng, lat):
@@ -35,19 +34,20 @@ def gcj02_to_wgs84(lng, lat):
     wgs_lng = lng - dlng
     return wgs_lng, wgs_lat
 
-# ==================== 模拟心跳包 ====================
-def update_heartbeat():
+# ==================== 模拟心跳包（每次点击按钮时更新） ====================
+def get_next_heartbeat():
+    """根据当前无人机位置向B点移动一步，返回新的心跳包"""
     if 'drone_pos_gcj' not in st.session_state:
         st.session_state.drone_pos_gcj = (118.7492, 32.2328)
     if 'heartbeat_history' not in st.session_state:
         st.session_state.heartbeat_history = []
     
-    # 向B点移动
+    # 向B点移动（如果存在）
     if st.session_state.get('B'):
         target_lng, target_lat = st.session_state.B
         cur_lng, cur_lat = st.session_state.drone_pos_gcj
-        dx = (target_lng - cur_lng) * 0.02
-        dy = (target_lat - cur_lat) * 0.02
+        dx = (target_lng - cur_lng) * 0.1  # 每次移动10%距离
+        dy = (target_lat - cur_lat) * 0.1
         if abs(dx) > 0.00001 or abs(dy) > 0.00001:
             st.session_state.drone_pos_gcj = (cur_lng + dx, cur_lat + dy)
     
@@ -73,7 +73,6 @@ def save_polygons_to_file():
     }
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
-    st.session_state.last_save_time = data["timestamp"]
     st.success(f"已保存到 {os.path.abspath(CONFIG_FILE)}")
 
 def load_polygons_from_file():
@@ -83,7 +82,6 @@ def load_polygons_from_file():
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
     st.session_state.polygons = data.get("polygons", [])
-    st.session_state.last_save_time = data.get("timestamp", "未知")
     st.success(f"已加载 {len(st.session_state.polygons)} 个障碍物")
 
 def clear_all_obstacles():
@@ -100,12 +98,9 @@ def one_click_deploy():
     st.success("已部署预设障碍物（3个示例多边形）")
 
 # ==================== Streamlit 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划系统 - 心跳包实时显示")
+st.set_page_config(layout="wide", page_title="无人机障碍物规划系统 - 心跳包手动刷新")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("卫星地图 | GCJ-02坐标自动转换 | 障碍物持久化 | 心跳包实时刷新")
-
-# 自动刷新（每3秒）
-st_autorefresh(interval=3000, key="heartbeat_auto")
+st.markdown("卫星地图 | GCJ-02坐标自动转换 | 障碍物持久化 | 心跳包手动刷新（无地图闪烁）")
 
 # ---------- 初始化 session_state ----------
 if 'polygons' not in st.session_state:
@@ -116,19 +111,30 @@ if 'B' not in st.session_state:
     st.session_state.B = None
 if 'flight_height' not in st.session_state:
     st.session_state.flight_height = 50
-if 'last_save_time' not in st.session_state:
-    st.session_state.last_save_time = None
+if 'drone_pos_gcj' not in st.session_state:
+    st.session_state.drone_pos_gcj = (118.7492, 32.2328)
+if 'heartbeat_history' not in st.session_state:
+    st.session_state.heartbeat_history = []
 
-# ---------- 获取最新心跳包 ----------
-current_heartbeat = update_heartbeat()
+# ---------- 处理心跳包更新（手动按钮） ----------
+if st.button("📡 获取最新心跳", key="get_heartbeat"):
+    new_hb = get_next_heartbeat()
+    st.success(f"心跳已更新: {new_hb['timestamp']} 经度={new_hb['lng']:.5f} 纬度={new_hb['lat']:.5f} 高度={new_hb['alt']}m")
+    # 注意：点击后页面会刷新一次，地图会重新渲染，但这是用户主动操作，不会频繁闪烁
+
+# 获取当前心跳（用于显示，如果从未获取过则初始化一次）
+if not st.session_state.heartbeat_history:
+    get_next_heartbeat()  # 初始化一次
+current_heartbeat = st.session_state.heartbeat_history[0] if st.session_state.heartbeat_history else None
 
 # ---------- 主页面顶部：实时心跳包卡片 ----------
-st.subheader("📡 实时心跳包 (每3秒自动刷新)")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("经度 (GCJ-02)", f"{current_heartbeat['lng']:.6f}")
-col2.metric("纬度 (GCJ-02)", f"{current_heartbeat['lat']:.6f}")
-col3.metric("飞行高度 (m)", f"{current_heartbeat['alt']}")
-col4.metric("时间戳", current_heartbeat['timestamp'])
+if current_heartbeat:
+    st.subheader("📡 最新心跳包")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("经度 (GCJ-02)", f"{current_heartbeat['lng']:.6f}")
+    col2.metric("纬度 (GCJ-02)", f"{current_heartbeat['lat']:.6f}")
+    col3.metric("飞行高度 (m)", f"{current_heartbeat['alt']}")
+    col4.metric("时间戳", current_heartbeat['timestamp'])
 
 # ---------- 侧边栏：飞行参数与障碍物管理 ----------
 with st.sidebar:
@@ -265,7 +271,7 @@ if st.session_state.B:
     b_wgs = gcj02_to_wgs84(st.session_state.B[0], st.session_state.B[1])
     folium.Marker([b_wgs[1], b_wgs[0]], popup='终点 B', icon=folium.Icon(color='red')).add_to(m)
 
-# 无人机位置
+# 无人机位置（使用当前最新心跳的坐标）
 drone_pos = st.session_state.drone_pos_gcj
 drone_wgs = gcj02_to_wgs84(drone_pos[0], drone_pos[1])
 folium.Marker([drone_wgs[1], drone_wgs[0]], popup='无人机', icon=folium.Icon(color='blue', icon='plane', prefix='fa')).add_to(m)
@@ -286,4 +292,4 @@ for poly in st.session_state.polygons:
 
 folium_static(m, width=1200, height=600)
 
-st.caption("Leaflet | Esri World Imagery | 坐标系统: GCJ-02 输入自动转 WGS84 显示")
+st.caption("Leaflet | Esri World Imagery | 坐标系统: GCJ-02 输入自动转 WGS84 显示 | 心跳包需手动点击按钮更新，地图仅在您操作时刷新，无自动闪烁")
