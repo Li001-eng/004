@@ -5,6 +5,7 @@ import numpy as np
 import json
 import os
 from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
 
 # ==================== GCJ-02 转 WGS84 ====================
 def gcj02_to_wgs84(lng, lat):
@@ -35,10 +36,13 @@ def gcj02_to_wgs84(lng, lat):
     return wgs_lng, wgs_lat
 
 # ==================== 模拟心跳包 ====================
-def get_heartbeat():
+def update_heartbeat():
     if 'drone_pos_gcj' not in st.session_state:
         st.session_state.drone_pos_gcj = (118.7492, 32.2328)
-    # 简单向B点移动（若存在）
+    if 'heartbeat_history' not in st.session_state:
+        st.session_state.heartbeat_history = []
+    
+    # 向B点移动
     if st.session_state.get('B'):
         target_lng, target_lat = st.session_state.B
         cur_lng, cur_lat = st.session_state.drone_pos_gcj
@@ -46,15 +50,22 @@ def get_heartbeat():
         dy = (target_lat - cur_lat) * 0.02
         if abs(dx) > 0.00001 or abs(dy) > 0.00001:
             st.session_state.drone_pos_gcj = (cur_lng + dx, cur_lat + dy)
-    return {"lng": st.session_state.drone_pos_gcj[0],
-            "lat": st.session_state.drone_pos_gcj[1],
-            "alt": st.session_state.get('flight_height', 50)}
+    
+    heartbeat = {
+        "timestamp": datetime.now().strftime("%H:%M:%S"),
+        "lng": st.session_state.drone_pos_gcj[0],
+        "lat": st.session_state.drone_pos_gcj[1],
+        "alt": st.session_state.get('flight_height', 50)
+    }
+    # 保留最近5条记录
+    st.session_state.heartbeat_history.insert(0, heartbeat)
+    st.session_state.heartbeat_history = st.session_state.heartbeat_history[:5]
+    return heartbeat
 
-# ==================== 配置文件路径 ====================
+# ==================== 配置文件操作 ====================
 CONFIG_FILE = "obstacle_config.json"
 
 def save_polygons_to_file():
-    """保存当前障碍物列表到JSON文件"""
     data = {
         "version": "v12.2",
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -66,7 +77,6 @@ def save_polygons_to_file():
     st.success(f"已保存到 {os.path.abspath(CONFIG_FILE)}")
 
 def load_polygons_from_file():
-    """从JSON文件加载障碍物列表"""
     if not os.path.exists(CONFIG_FILE):
         st.error("配置文件不存在，请先保存")
         return
@@ -74,14 +84,13 @@ def load_polygons_from_file():
         data = json.load(f)
     st.session_state.polygons = data.get("polygons", [])
     st.session_state.last_save_time = data.get("timestamp", "未知")
-    st.success(f"已加载 {len(st.session_state.polygons)} 个障碍物，版本 {data.get('version', '未知')}")
+    st.success(f"已加载 {len(st.session_state.polygons)} 个障碍物")
 
 def clear_all_obstacles():
     st.session_state.polygons = []
     st.success("已清除所有障碍物")
 
 def one_click_deploy():
-    """一键部署：加载预设示例障碍物（校园内典型区域）"""
     example_polygons = [
         [[118.7485, 32.2325], [118.7490, 32.2327], [118.7488, 32.2330]],
         [[118.7495, 32.2335], [118.7500, 32.2332], [118.7498, 32.2338]],
@@ -91,9 +100,12 @@ def one_click_deploy():
     st.success("已部署预设障碍物（3个示例多边形）")
 
 # ==================== Streamlit 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划系统")
+st.set_page_config(layout="wide", page_title="无人机障碍物规划系统 - 心跳包实时显示")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("卫星地图 | GCJ-02坐标自动转换 | 障碍物持久化（JSON文件）")
+st.markdown("卫星地图 | GCJ-02坐标自动转换 | 障碍物持久化 | 心跳包实时刷新")
+
+# 自动刷新（每3秒）
+st_autorefresh(interval=3000, key="heartbeat_auto")
 
 # ---------- 初始化 session_state ----------
 if 'polygons' not in st.session_state:
@@ -106,6 +118,17 @@ if 'flight_height' not in st.session_state:
     st.session_state.flight_height = 50
 if 'last_save_time' not in st.session_state:
     st.session_state.last_save_time = None
+
+# ---------- 获取最新心跳包 ----------
+current_heartbeat = update_heartbeat()
+
+# ---------- 主页面顶部：实时心跳包卡片 ----------
+st.subheader("📡 实时心跳包 (每3秒自动刷新)")
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("经度 (GCJ-02)", f"{current_heartbeat['lng']:.6f}")
+col2.metric("纬度 (GCJ-02)", f"{current_heartbeat['lat']:.6f}")
+col3.metric("飞行高度 (m)", f"{current_heartbeat['alt']}")
+col4.metric("时间戳", current_heartbeat['timestamp'])
 
 # ---------- 侧边栏：飞行参数与障碍物管理 ----------
 with st.sidebar:
@@ -139,10 +162,15 @@ with st.sidebar:
     st.session_state.flight_height = height
     
     st.markdown("---")
+    st.subheader("💓 心跳包历史 (最近5次)")
+    for hb in st.session_state.heartbeat_history:
+        st.text(f"{hb['timestamp']}  Lng:{hb['lng']:.5f} Lat:{hb['lat']:.5f} Alt:{hb['alt']}m")
     
-    # 障碍物管理区域（持久化功能）
+    st.markdown("---")
+    
+    # 障碍物管理区域
     st.subheader("🛑 障碍物配置持久化")
-    st.caption(f"配置文件: `{os.path.abspath(CONFIG_FILE)}` | 版本: v12.2 障碍物持久化版")
+    st.caption(f"配置文件: `{os.path.abspath(CONFIG_FILE)}` | 版本: v12.2")
     
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
@@ -161,8 +189,7 @@ with st.sidebar:
             one_click_deploy()
     
     st.markdown("---")
-    st.subheader("📥 下载配置文件到本地")
-    # 提供下载按钮（如果文件存在）
+    st.subheader("📥 下载配置文件")
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "rb") as f:
             file_bytes = f.read()
@@ -173,9 +200,9 @@ with st.sidebar:
             mime="application/json"
         )
     else:
-        st.info("尚未保存配置文件，请先点击「保存到文件」")
+        st.info("尚未保存配置文件")
     
-    # 显示文件状态
+    # 文件状态
     st.markdown("---")
     st.subheader("📄 文件状态")
     if os.path.exists(CONFIG_FILE):
@@ -183,12 +210,11 @@ with st.sidebar:
             data = json.load(f)
         num = len(data.get("polygons", []))
         save_time = data.get("timestamp", "未知")
-        version = data.get("version", "未知")
-        st.success(f"共 {num} 个障碍物 | 保存时间: {save_time} | 版本: {version}")
+        st.success(f"共 {num} 个障碍物 | 保存时间: {save_time}")
     else:
-        st.warning("暂无配置文件，保存后将显示状态")
+        st.warning("暂无配置文件")
     
-    # 手动添加障碍物（多边形顶点输入）
+    # 手动添加障碍物
     st.markdown("---")
     st.subheader("✏️ 手动添加障碍物")
     st.markdown("每行一个顶点：经度,纬度 (GCJ-02)")
@@ -209,14 +235,7 @@ with st.sidebar:
         except Exception as e:
             st.error(f"格式错误: {e}")
 
-# ---------- 心跳包数据 ----------
-heartbeat = get_heartbeat()
-drone_pos_gcj = (heartbeat["lng"], heartbeat["lat"])
-
-# 侧边栏显示心跳信息
-st.sidebar.metric("最新心跳", f"经度 {heartbeat['lng']:.5f} | 纬度 {heartbeat['lat']:.5f} | 高度 {heartbeat['alt']}m")
-
-# ---------- 确定地图中心点 ----------
+# ---------- 地图中心点 ----------
 if st.session_state.A and st.session_state.B:
     center_gcj = ((st.session_state.A[0] + st.session_state.B[0]) / 2,
                   (st.session_state.A[1] + st.session_state.B[1]) / 2)
@@ -225,21 +244,20 @@ elif st.session_state.A:
 elif st.session_state.B:
     center_gcj = st.session_state.B
 else:
-    center_gcj = (118.7492, 32.2332)  # 校园默认中心
+    center_gcj = (118.7492, 32.2332)
 
 center_wgs = gcj02_to_wgs84(center_gcj[0], center_gcj[1])
 
-# ---------- 创建 Folium 地图 ----------
+# ---------- 创建地图 ----------
 m = folium.Map(
     location=[center_wgs[1], center_wgs[0]],
     zoom_start=17,
     tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     attr='Esri World Imagery'
 )
-# 叠加半透明 OpenStreetMap 标注层
 folium.TileLayer('openstreetmap', opacity=0.5).add_to(m)
 
-# 添加 A/B 点
+# A/B 点
 if st.session_state.A:
     a_wgs = gcj02_to_wgs84(st.session_state.A[0], st.session_state.A[1])
     folium.Marker([a_wgs[1], a_wgs[0]], popup='起点 A', icon=folium.Icon(color='green')).add_to(m)
@@ -247,27 +265,25 @@ if st.session_state.B:
     b_wgs = gcj02_to_wgs84(st.session_state.B[0], st.session_state.B[1])
     folium.Marker([b_wgs[1], b_wgs[0]], popup='终点 B', icon=folium.Icon(color='red')).add_to(m)
 
-# 添加无人机位置
-drone_wgs = gcj02_to_wgs84(drone_pos_gcj[0], drone_pos_gcj[1])
+# 无人机位置
+drone_pos = st.session_state.drone_pos_gcj
+drone_wgs = gcj02_to_wgs84(drone_pos[0], drone_pos[1])
 folium.Marker([drone_wgs[1], drone_wgs[0]], popup='无人机', icon=folium.Icon(color='blue', icon='plane', prefix='fa')).add_to(m)
 
-# 添加航线
+# 航线
 if st.session_state.A and st.session_state.B:
     a_wgs = gcj02_to_wgs84(st.session_state.A[0], st.session_state.A[1])
     b_wgs = gcj02_to_wgs84(st.session_state.B[0], st.session_state.B[1])
     folium.PolyLine([[a_wgs[1], a_wgs[0]], [b_wgs[1], b_wgs[0]]], color='blue', weight=3).add_to(m)
 
-# 添加所有障碍物（多边形）
+# 障碍物
 for poly in st.session_state.polygons:
-    # poly 格式: [[lng, lat], ...] GCJ-02
     wgs_poly = []
     for lng, lat in poly:
         wgs_lng, wgs_lat = gcj02_to_wgs84(lng, lat)
         wgs_poly.append([wgs_lat, wgs_lng])
     folium.Polygon(wgs_poly, color='red', fill=True, fill_opacity=0.4, weight=2).add_to(m)
 
-# ---------- 显示地图 ----------
 folium_static(m, width=1200, height=600)
 
-# 底部提示
 st.caption("Leaflet | Esri World Imagery | 坐标系统: GCJ-02 输入自动转 WGS84 显示")
