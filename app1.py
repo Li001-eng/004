@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 from folium.plugins import Draw
 
-# ==================== GCJ-02 与 WGS84 转换 ====================
+# ==================== GCJ-02 与 WGS84 转换（精确） ====================
 a = 6378245.0
 ee = 0.00669342162296594323
 
@@ -97,29 +97,37 @@ def one_click_deploy():
     st.success("已部署预设障碍物")
 
 # ==================== 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 点击设置+手动输入")
+st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 修复圈选")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**卫星地图 + GCJ-02坐标** | **点击地图设置起点/终点（或手动输入）** | **绘制多边形添加障碍物**")
+st.markdown("**卫星地图 + GCJ-02坐标** | **手动输入A/B点（稳定）** | **多边形圈选障碍物**")
 
-# 初始化
-for key in ['polygons', 'A_gcj', 'B_gcj', 'flight_height', 'drone_pos_gcj', 'heartbeat_history', 'set_mode']:
-    if key not in st.session_state:
-        if key == 'polygons': st.session_state.polygons = []
-        elif key == 'A_gcj': st.session_state.A_gcj = None
-        elif key == 'B_gcj': st.session_state.B_gcj = None
-        elif key == 'flight_height': st.session_state.flight_height = 50
-        elif key == 'drone_pos_gcj': st.session_state.drone_pos_gcj = (118.7492, 32.2328)
-        elif key == 'heartbeat_history': st.session_state.heartbeat_history = []
-        elif key == 'set_mode': st.session_state.set_mode = "起点A"
+# 初始化所有状态
+if 'polygons' not in st.session_state:
+    st.session_state.polygons = []
+if 'A_gcj' not in st.session_state:
+    st.session_state.A_gcj = None
+if 'B_gcj' not in st.session_state:
+    st.session_state.B_gcj = None
+if 'flight_height' not in st.session_state:
+    st.session_state.flight_height = 50
+if 'drone_pos_gcj' not in st.session_state:
+    st.session_state.drone_pos_gcj = (118.7492, 32.2328)
+if 'heartbeat_history' not in st.session_state:
+    st.session_state.heartbeat_history = []
+if 'set_mode' not in st.session_state:
+    st.session_state.set_mode = "起点A"
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
     st.header("🎮 控制面板")
-    st.subheader("📍 地图点击模式")
+    
+    # 地图点击模式（保留，但可能不工作）
+    st.subheader("📍 地图点击模式（实验性）")
     mode = st.radio("点击地图设置:", ["起点A", "终点B"], index=0 if st.session_state.set_mode=="起点A" else 1)
     st.session_state.set_mode = mode
+    st.caption("如果点击无效，请使用下方手动输入")
     
-    # 手动输入坐标作为备选（100%可靠）
+    # 手动输入坐标（100%可靠）
     st.subheader("✏️ 手动设置坐标 (GCJ-02)")
     col1, col2 = st.columns(2)
     with col1:
@@ -171,8 +179,18 @@ with st.sidebar:
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "rb") as f:
             st.download_button("📥 下载配置", data=f, file_name="obstacle_config.json", mime="application/json")
+    
+    # 显示障碍物数量
     st.info(f"当前障碍物数量: {len(st.session_state.polygons)}")
-    st.caption("提示：如果地图点击无效，请使用手动输入。")
+    
+    # 调试区域：显示最后捕获的绘制和点击原始数据
+    st.markdown("---")
+    st.subheader("🔍 调试信息")
+    if 'last_draw_raw' in st.session_state:
+        st.write("最后绘制的原始数据:", st.session_state.last_draw_raw)
+    if 'last_click_raw' in st.session_state:
+        st.write("最后点击的原始数据:", st.session_state.last_click_raw)
+    st.caption("提示：如果圈选后数量仍为0，请查看原始数据格式")
 
 # ==================== 构建地图 ====================
 # 计算中心点（WGS84）
@@ -186,9 +204,11 @@ else:
     center_gcj = (118.7492, 32.2332)
 center_wgs = gcj02_to_wgs84(center_gcj[0], center_gcj[1])
 
+# 使用 Google 卫星图（高缩放级别）
 m = folium.Map(location=[center_wgs[1], center_wgs[0]], zoom_start=17,
-               tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-               attr='Esri World Imagery')
+               tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+               attr='Google Satellite',
+               max_zoom=20)
 folium.TileLayer('openstreetmap', opacity=0.5).add_to(m)
 
 # 添加 A/B/无人机/航线/障碍物
@@ -211,17 +231,39 @@ for poly_gcj in st.session_state.polygons:
     folium.Polygon(wgs_poly, color='red', fill=True, fill_opacity=0.4, weight=2).add_to(m)
 
 # 添加绘图控件
-draw = Draw(draw_options={'polygon': {'allowIntersection': False, 'showArea': True}, 'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False},
-            edit_options={'edit': True, 'remove': True})
+draw = Draw(draw_options={
+    'polygon': {'allowIntersection': False, 'showArea': True},
+    'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False
+}, edit_options={'edit': True, 'remove': True})
 draw.add_to(m)
 
 # 显示地图并捕获交互
 output = st_folium(m, width=1200, height=600, key="map_with_draw", returned_objects=["last_click", "last_draw"])
 
-# ==================== 处理点击事件（调试版） ====================
+# ==================== 处理绘制事件（障碍物） ====================
+if output and output.get("last_draw"):
+    draw_data = output["last_draw"]
+    # 保存原始数据用于调试
+    st.session_state.last_draw_raw = draw_data
+    if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
+        coords_wgs = draw_data["geometry"]["coordinates"][0]  # 外环
+        if len(coords_wgs) >= 3:
+            poly_gcj = []
+            for lng, lat in coords_wgs:
+                gcj_lng, gcj_lat = wgs84_to_gcj02(lng, lat)
+                poly_gcj.append([gcj_lng, gcj_lat])
+            st.session_state.polygons.append(poly_gcj)
+            st.sidebar.success(f"已添加障碍物，当前总数: {len(st.session_state.polygons)}")
+            st.rerun()
+        else:
+            st.sidebar.warning("多边形顶点数不足3")
+    else:
+        st.sidebar.warning("绘制对象不是多边形，请使用多边形工具")
+
+# ==================== 处理点击事件（A/B点） ====================
 if output and output.get("last_click"):
     click = output["last_click"]
-    st.sidebar.write("🔍 调试：点击返回数据:", click)  # 显示原始数据，帮助诊断
+    st.session_state.last_click_raw = click
     if click and "lng" in click and "lat" in click:
         lng_wgs = click["lng"]
         lat_wgs = click["lat"]
@@ -234,17 +276,11 @@ if output and output.get("last_click"):
             st.sidebar.success(f"终点B已设置 (GCJ-02): {gcj_lng:.6f}, {gcj_lat:.6f}")
         st.rerun()
     else:
-        st.sidebar.warning("点击坐标数据不完整，请重试")
+        st.sidebar.warning("点击坐标数据不完整")
 
-# 处理多边形绘制
-if output and output.get("last_draw"):
-    draw_data = output["last_draw"]
-    if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
-        coords_wgs = draw_data["geometry"]["coordinates"][0]
-        poly_gcj = [wgs84_to_gcj02(lng, lat) for lng, lat in coords_wgs]
-        if len(poly_gcj) >= 3:
-            st.session_state.polygons.append(poly_gcj)
-            st.sidebar.success("新障碍物已添加！")
-            st.rerun()
-
-st.caption("✅ 使用说明：\n1. 左侧选择起点A/终点B，然后在地图上单击（若无效，请使用手动输入）。\n2. 使用多边形工具绘制障碍物。\n3. 心跳包点击获取最新位置。")
+# 底部说明
+st.caption("✅ 使用说明：\n"
+           "1. **设置A/B点**：推荐使用侧边栏的「手动设置坐标」，100%可靠。地图点击为实验性功能。\n"
+           "2. **添加障碍物**：点击地图左上角的多边形图标 ➕，在地图上绘制闭合图形，松开鼠标后自动添加。\n"
+           "3. **保存障碍物**：点击「保存到文件」，下次启动可「从文件加载」。\n"
+           "4. **心跳包**：点击「获取最新心跳」，无人机向B点移动。")
