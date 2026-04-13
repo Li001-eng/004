@@ -128,7 +128,7 @@ with st.sidebar:
         a_lat = st.number_input("纬度", value=32.2323, format="%.6f", key="a_lat")
     with col2:
         a_lng = st.number_input("经度", value=118.7490, format="%.6f", key="a_lng")
-    if st.button("设置A点"):
+    if st.button("设置A点", key="set_A"):
         st.session_state.A_gcj = (a_lng, a_lat)
         st.rerun()
     
@@ -139,7 +139,7 @@ with st.sidebar:
         b_lat = st.number_input("纬度", value=32.2344, format="%.6f", key="b_lat")
     with col4:
         b_lng = st.number_input("经度", value=118.7490, format="%.6f", key="b_lng")
-    if st.button("设置B点"):
+    if st.button("设置B点", key="set_B"):
         st.session_state.B_gcj = (b_lng, b_lat)
         st.rerun()
     
@@ -151,11 +151,11 @@ with st.sidebar:
     
     # 飞行参数
     st.subheader("🚁 飞行参数")
-    st.session_state.flight_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5)
+    st.session_state.flight_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height")
     
     # 心跳包
     st.subheader("💓 心跳包")
-    if st.button("📡 获取最新心跳"):
+    if st.button("📡 获取最新心跳", key="heartbeat"):
         update_heartbeat()
         st.rerun()
     if st.session_state.heartbeat_history:
@@ -167,12 +167,12 @@ with st.sidebar:
     st.subheader("🛑 障碍物管理")
     
     # 两个关键按钮：获取当前绘制、添加障碍物
-    if st.button("📐 获取当前绘制 (从地图)"):
+    if st.button("📐 获取当前绘制 (从地图)", key="get_draw"):
         # 这个按钮需要配合地图的 output，我们在地图显示之后才能获取，所以放在下面
         pass  # 实际逻辑在地图部分处理，因为需要 output 对象
     
     # 添加障碍物按钮
-    if st.button("➕ 添加障碍物"):
+    if st.button("➕ 添加障碍物", key="add_obstacle"):
         if st.session_state.pending_draw and len(st.session_state.pending_draw) >= 3:
             # 转换 GCJ-02 并存储
             gcj_coords = []
@@ -190,18 +190,18 @@ with st.sidebar:
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("💾 保存到文件"):
+        if st.button("💾 保存到文件", key="save"):
             save_polygons()
     with col2:
-        if st.button("📂 从文件加载"):
+        if st.button("📂 从文件加载", key="load"):
             load_polygons()
     col3, col4 = st.columns(2)
     with col3:
-        if st.button("🗑️ 清除全部"):
+        if st.button("🗑️ 清除全部", key="clear"):
             clear_polygons()
             st.rerun()
     with col4:
-        if st.button("🚀 一键部署"):
+        if st.button("🚀 一键部署", key="deploy"):
             st.session_state.polygons = [
                 [[118.7485, 32.2325], [118.7490, 32.2327], [118.7488, 32.2330]],
                 [[118.7495, 32.2335], [118.7500, 32.2332], [118.7498, 32.2338]]
@@ -211,7 +211,7 @@ with st.sidebar:
     
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "rb") as f:
-            st.download_button("📥 下载配置文件", data=f, file_name="obstacle_config.json", mime="application/json")
+            st.download_button("📥 下载配置文件", data=f, file_name="obstacle_config.json", mime="application/json", key="download")
     
     # 显示暂存的多边形（调试）
     st.markdown("---")
@@ -287,7 +287,7 @@ output = st_folium(m, width=1200, height=600, key="map_with_draw", returned_obje
 
 # ==================== 手动获取当前绘制 ====================
 # 这里放置一个按钮，用户点击时从 output 中读取 last_draw 并存入 pending_draw
-if st.sidebar.button("📐 获取当前绘制 (从地图)"):
+if st.sidebar.button("📐 获取当前绘制 (从地图)", key="get_draw_actual"):
     if output and output.get("last_draw"):
         draw_data = output["last_draw"]
         if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
