@@ -6,7 +6,6 @@ import json
 import os
 from datetime import datetime
 from folium.plugins import Draw
-from streamlit.components.v1 import html
 
 # ==================== GCJ-02 与 WGS84 转换 ====================
 a = 6378245.0
@@ -97,25 +96,10 @@ def clear_polygons():
     st.session_state.polygons = []
     st.success("已清除所有障碍物")
 
-# ==================== 注入 JavaScript 以自动填充文本框 ====================
-def inject_js():
-    """在地图上绘制多边形后，自动将坐标写入隐藏的 textarea，然后通过 Streamlit 的 setComponentValue 传回"""
-    js_code = """
-    <script>
-    // 等待地图加载完成（监听 draw:created 事件，通过全局变量通信）
-    window.addEventListener('load', function() {
-        // 由于地图是在 st_folium 中动态生成的，无法直接获取 map 对象，所以采用轮询方式
-        // 更好的办法：在 st_folium 的 html 中直接嵌入脚本，但 st_folium 不提供自定义 js 的入口。
-        // 因此，我们放弃自动填充，改为提供手动复制功能。
-    });
-    </script>
-    """
-    return html(js_code, height=0)
-
 # ==================== 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 最终稳定版")
+st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 圈选辅助")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**卫星地图 + GCJ-02坐标** | **绘制多边形 → 手动复制坐标 → 粘贴添加**")
+st.markdown("**卫星地图 + GCJ-02坐标** | **绘制多边形 → 复制坐标 → 粘贴添加**")
 
 # 初始化状态
 if 'polygons' not in st.session_state:
@@ -177,9 +161,9 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🛑 障碍物管理")
     
-    # 手动输入多边形坐标（替代自动捕获）
-    st.markdown("**添加障碍物（手动输入坐标）**")
-    st.markdown("每行一个顶点：经度,纬度 (GCJ-02)")
+    # 手动输入多边形顶点（替代自动捕获）
+    st.markdown("**手动添加障碍物（GCJ-02坐标）**")
+    st.markdown("每行一个顶点：经度,纬度（至少3行）")
     poly_text = st.text_area("多边形顶点", height=150, key="poly_input",
                              placeholder="118.7485,32.2325\n118.7490,32.2327\n118.7488,32.2330")
     if st.button("➕ 添加障碍物", key="add_obstacle"):
@@ -226,16 +210,24 @@ with st.sidebar:
             st.download_button("📥 下载配置文件", data=f, file_name="obstacle_config.json", mime="application/json", key="download")
     
     st.markdown("---")
-    st.subheader("📌 如何获取多边形坐标")
+    st.subheader("📌 如何从地图获取坐标")
     st.markdown("""
-    1. 在地图上使用左上角的「多边形工具」画出区域。
-    2. 绘制完成后，**按 F12 打开浏览器开发者工具** → 选择 Console 标签。
-    3. 输入以下代码并回车，即可复制坐标到剪贴板：
+    **步骤：**
+    1. 在地图上用多边形工具画出区域。
+    2. 按 F12 打开浏览器开发者工具，切换到 Console（控制台）。
+    3. 输入以下代码并回车：
        ```javascript
        var layers = document.querySelectorAll('.leaflet-polygon');
        if (layers.length) {
            var last = layers[layers.length-1];
-           var d = last.getAttribute('d');
-           // 解析 SVG path 较为复杂，建议手动记录坐标点
-           console.log('请手动记录多边形顶点坐标');
+           var leafletId = last._leaflet_id;
+           var map = Object.values(window).find(v => v && v._container && v._container.id === 'map');
+           if (map && map._layers[leafletId]) {
+               var coords = map._layers[leafletId].getLatLngs()[0];
+               var output = '';
+               coords.forEach(c => { output += c.lng + ',' + c.lat + '\\n'; });
+               console.log(output);
+               copy(output);
+               alert('坐标已复制到剪贴板');
+           }
        }
