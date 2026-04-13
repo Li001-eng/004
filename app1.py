@@ -6,7 +6,6 @@ import json
 import os
 from datetime import datetime
 from folium.plugins import Draw
-from streamlit.components.v1 import html
 
 # ==================== GCJ-02 与 WGS84 转换 ====================
 a = 6378245.0
@@ -97,22 +96,6 @@ def clear_polygons():
     st.session_state.polygons = []
     st.success("已清除所有障碍物")
 
-# ==================== 辅助函数：显示多边形坐标弹窗 ====================
-def add_polygon_alert_js():
-    """注入一段 JavaScript，让用户点击多边形时弹窗显示坐标并复制到剪贴板"""
-    js_code = """
-    <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        // 等待地图加载，监听 draw:created 事件（需要与地图交互）
-        // 由于无法直接获取 folium 地图对象，改用全局监听
-        // 这里提供一个简单方法：用户绘制完成后，弹出一个提示框显示坐标
-        // 实际使用时，用户可以通过浏览器控制台或右键点击多边形查看属性
-        console.log("请在地图上绘制多边形，然后右键点击多边形 -> 检查元素 获取坐标");
-    });
-    </script>
-    """
-    return html(js_code, height=0)
-
 # ==================== 主界面 ====================
 st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 手动复制坐标版")
 st.title("✈️ 校园无人机飞行规划与实时监控")
@@ -167,7 +150,7 @@ with st.sidebar:
     # 飞行参数
     st.subheader("🚁 飞行参数")
     new_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height_input")
-    st.session_state.flight_height = new_height  # 直接赋值不会冲突
+    st.session_state.flight_height = new_height
     
     # 心跳包
     st.subheader("💓 心跳包")
@@ -234,12 +217,72 @@ with st.sidebar:
     st.subheader("📌 如何获取多边形坐标")
     st.markdown("""
     1. 在地图上使用左上角的「多边形工具」画出区域。
-    2. 绘制完成后，**右键点击多边形** → 选择「检查元素」（或按F12打开开发者工具）。
-    3. 在控制台中输入以下代码并回车：
-       ```javascript
-       var coords = [];
-       document.querySelectorAll('.leaflet-polygon path').forEach(p => {
-           let d = p.getAttribute('d');
-           // 解析路径较为复杂，建议使用下面的方法直接获取最后绘制的多边形
-       });
-       // 更简单的方法：在地图绘制时弹窗显示坐标（需要修改地图组件）
+    2. 绘制完成后，**右键点击多边形** → 选择「检查元素」。
+    3. 在开发者工具的 Console 中输入以下代码获取顶点坐标（近似）：
+       `document.querySelectorAll('.leaflet-polygon path')[0].getAttribute('d')`
+    4. 推荐直接使用侧边栏的文本框手动输入坐标（更简单）。
+    """)
+
+# ==================== 地图显示 ====================
+# 计算中心点
+if st.session_state.A_gcj and st.session_state.B_gcj:
+    center_gcj = ((st.session_state.A_gcj[0] + st.session_state.B_gcj[0]) / 2,
+                  (st.session_state.A_gcj[1] + st.session_state.B_gcj[1]) / 2)
+elif st.session_state.A_gcj:
+    center_gcj = st.session_state.A_gcj
+elif st.session_state.B_gcj:
+    center_gcj = st.session_state.B_gcj
+else:
+    center_gcj = (118.7492, 32.2332)
+center_wgs_lng, center_wgs_lat = gcj02_to_wgs84(center_gcj[0], center_gcj[1])
+center = [center_wgs_lat, center_wgs_lng]
+
+m = folium.Map(location=center, zoom_start=17,
+               tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+               attr='Esri World Imagery')
+folium.TileLayer('openstreetmap', opacity=0.5).add_to(m)
+
+# 添加标记和障碍物
+if st.session_state.A_gcj:
+    lng, lat = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
+    folium.Marker([lat, lng], popup='起点 A', icon=folium.Icon(color='green')).add_to(m)
+if st.session_state.B_gcj:
+    lng, lat = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
+    folium.Marker([lat, lng], popup='终点 B', icon=folium.Icon(color='red')).add_to(m)
+if st.session_state.heartbeat_history:
+    cur = st.session_state.heartbeat_history[0]
+    lng, lat = gcj02_to_wgs84(cur['lng'], cur['lat'])
+    folium.Marker([lat, lng], popup='无人机', icon=folium.Icon(color='blue', icon='plane', prefix='fa')).add_to(m)
+if st.session_state.A_gcj and st.session_state.B_gcj:
+    a_lng, a_lat = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
+    b_lng, b_lat = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
+    folium.PolyLine([[a_lat, a_lng], [b_lat, b_lng]], color='blue', weight=3).add_to(m)
+for poly_gcj in st.session_state.polygons:
+    wgs_poly = []
+    for lng, lat in poly_gcj:
+        wlng, wlat = gcj02_to_wgs84(lng, lat)
+        wgs_poly.append([wlat, wlng])
+    folium.Polygon(wgs_poly, color='red', fill=True, fill_opacity=0.4, weight=2).add_to(m)
+
+# 添加绘图控件
+draw = Draw(
+    draw_options={
+        'polygon': {'allowIntersection': False, 'showArea': True},
+        'polyline': False,
+        'rectangle': False,
+        'circle': False,
+        'marker': False,
+        'circlemarker': False
+    },
+    edit_options={'edit': True, 'remove': True}
+)
+draw.add_to(m)
+
+# 显示地图（不捕获事件）
+st_folium(m, width=1200, height=600, key="map_only")
+
+st.caption("✅ 使用说明：\n"
+           "1. **设置起点/终点**：在侧边栏手动输入 GCJ-02 经纬度。\n"
+           "2. **添加障碍物**：在地图上使用多边形工具绘制区域，然后手动将顶点坐标（经度,纬度）按行复制到侧边栏的文本框，点击「添加障碍物」。\n"
+           "3. **保存/加载**：使用侧边栏按钮持久化配置。\n"
+           "4. **心跳包**：点击获取最新无人机位置。")
