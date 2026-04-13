@@ -6,7 +6,6 @@ import json
 import os
 from datetime import datetime
 from folium.plugins import Draw
-from math import radians, sin, cos, sqrt, atan2
 
 # ==================== GCJ-02 与 WGS84 转换 ====================
 a = 6378245.0
@@ -48,15 +47,6 @@ def gcj02_to_wgs84(lng, lat):
     dlng = (dlng * 180.0) / (a / sqrtmagic * np.cos(radlat) * np.pi)
     return lng - dlng, lat - dlat
 
-# 计算两点距离（米）
-def haversine(lon1, lat1, lon2, lat2):
-    R = 6371000
-    phi1, phi2 = radians(lat1), radians(lat2)
-    dphi = radians(lat2 - lat1)
-    dlambda = radians(lon2 - lon1)
-    a = sin(dphi/2)**2 + cos(phi1)*cos(phi2)*sin(dlambda/2)**2
-    return 2 * R * atan2(sqrt(a), sqrt(1-a))
-
 # ==================== 模拟心跳包 ====================
 def update_heartbeat():
     if 'drone_pos_gcj' not in st.session_state:
@@ -77,22 +67,8 @@ def update_heartbeat():
         "alt": st.session_state.flight_height
     }
     st.session_state.heartbeat_history.insert(0, heartbeat)
-    st.session_state.heartbeat_history = st.session_state.heartbeat_history[:20]
+    st.session_state.heartbeat_history = st.session_state.heartbeat_history[:5]
     return heartbeat
-
-def compute_speed_and_distance():
-    history = st.session_state.heartbeat_history
-    if len(history) < 2:
-        return 0, None
-    prev = history[1]
-    curr = history[0]
-    dist = haversine(prev['lng'], prev['lat'], curr['lng'], curr['lat'])
-    speed = dist / 3.0
-    if st.session_state.B_gcj:
-        b_lng, b_lat = st.session_state.B_gcj
-        dist_to_b = haversine(curr['lng'], curr['lat'], b_lng, b_lat)
-        return speed, dist_to_b
-    return speed, None
 
 # ==================== 障碍物持久化 ====================
 CONFIG_FILE = "obstacle_config.json"
@@ -123,7 +99,7 @@ def clear_polygons():
 # ==================== 主界面 ====================
 st.set_page_config(layout="wide", page_title="无人机障碍物规划系统")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**卫星地图 + GCJ-02坐标** | 支持地图圈选 & 手动输入障碍物 | 心跳包可视化")
+st.markdown("**卫星地图 + GCJ-02坐标** | 支持地图圈选 & 手动输入障碍物")
 
 # 初始化状态
 if 'polygons' not in st.session_state:
@@ -143,10 +119,7 @@ if 'manual_polygon_text' not in st.session_state:
 if 'clicked_coord' not in st.session_state:
     st.session_state.clicked_coord = None
 if 'last_drawn_coords' not in st.session_state:
-    st.session_state.last_drawn_coords = None
-
-if not st.session_state.heartbeat_history:
-    update_heartbeat()
+    st.session_state.last_drawn_coords = None  # 存储最新绘制的多边形 (WGS84)
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
@@ -180,25 +153,19 @@ with st.sidebar:
     if st.session_state.B_gcj:
         st.info(f"终点B: {st.session_state.B_gcj[0]:.6f}, {st.session_state.B_gcj[1]:.6f}")
     
+    # 飞行参数
     st.subheader("🚁 飞行参数")
     st.session_state.flight_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height_input")
     
+    # 心跳包
     st.subheader("💓 心跳包")
     if st.button("📡 获取最新心跳", key="heartbeat"):
         update_heartbeat()
         st.rerun()
-    
     if st.session_state.heartbeat_history:
         cur = st.session_state.heartbeat_history[0]
-        speed, dist_to_b = compute_speed_and_distance()
-        st.metric("当前位置 (GCJ-02)", f"{cur['lng']:.5f}, {cur['lat']:.5f}")
-        st.metric("当前高度", f"{cur['alt']} m")
-        if dist_to_b is not None:
-            st.metric("距离终点 B", f"{dist_to_b:.1f} m")
-        st.metric("估算速度", f"{speed:.2f} m/s")
-        if st.session_state.flight_height > 0:
-            progress = min(1.0, cur['alt'] / st.session_state.flight_height)
-            st.progress(progress, text=f"高度进度: {cur['alt']}/{st.session_state.flight_height} m")
+        st.metric("无人机位置 (GCJ-02)", f"{cur['lng']:.5f}, {cur['lat']:.5f}")
+        st.caption(f"高度: {cur['alt']}m | {cur['timestamp']}")
     
     st.markdown("---")
     st.subheader("🛑 障碍物管理")
@@ -207,6 +174,7 @@ with st.sidebar:
     st.markdown("### 🖱️ 从地图圈选添加")
     if st.button("➕ 添加障碍物（从当前圈选）", key="add_from_map"):
         if st.session_state.last_drawn_coords and len(st.session_state.last_drawn_coords) >= 3:
+            # 转换为 GCJ-02 存储
             gcj_coords = []
             for lng, lat in st.session_state.last_drawn_coords:
                 gcj_lng, gcj_lat = wgs84_to_gcj02(lng, lat)
@@ -236,14 +204,14 @@ with st.sidebar:
             if len(coords) >= 3:
                 st.session_state.polygons.append(coords)
                 st.success(f"已添加手动障碍物，当前总数: {len(st.session_state.polygons)}")
-                st.session_state.manual_polygon_text = ""
+                st.session_state.manual_polygon_text = ""  # 清空
                 st.rerun()
             else:
                 st.error("至少需要3个顶点")
         except Exception as e:
             st.error(f"格式错误: {e}")
     
-    # 坐标拾取辅助
+    # 坐标拾取辅助（点击地图显示坐标）
     st.markdown("### 📍 坐标拾取辅助")
     st.markdown("点击地图任意位置获取GCJ-02坐标")
     if st.session_state.clicked_coord:
@@ -260,6 +228,7 @@ with st.sidebar:
     
     st.info(f"当前障碍物数量: {len(st.session_state.polygons)}")
     
+    # 障碍物持久化操作
     col1, col2 = st.columns(2)
     with col1:
         if st.button("💾 保存到文件", key="save"):
@@ -285,16 +254,9 @@ with st.sidebar:
         with open(CONFIG_FILE, "rb") as f:
             st.download_button("📥 下载配置文件", data=f, file_name="obstacle_config.json", mime="application/json", key="download")
     
+    # 显示配置文件路径
     st.markdown("---")
     st.caption(f"配置文件: `{os.path.abspath(CONFIG_FILE)}` | 版本: v12.2")
-
-# ==================== 心跳高度历史折线图 (使用 st.line_chart) ====================
-if st.session_state.heartbeat_history:
-    # 准备数据：从旧到新
-    hist_rev = list(reversed(st.session_state.heartbeat_history))
-    altitude_df = {"时间": [h['timestamp'] for h in hist_rev], "高度(m)": [h['alt'] for h in hist_rev]}
-    st.subheader("📈 心跳高度历史")
-    st.line_chart(altitude_df, x="时间", y="高度(m)", height=300)
 
 # ==================== 地图显示 ====================
 # 计算地图中心点 (WGS84)
@@ -310,6 +272,7 @@ else:
 center_wgs_lng, center_wgs_lat = gcj02_to_wgs84(center_gcj[0], center_gcj[1])
 center = [center_wgs_lat, center_wgs_lng]
 
+# 创建底图
 m = folium.Map(location=center, zoom_start=17,
                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
                attr='Esri World Imagery')
@@ -323,15 +286,7 @@ if st.session_state.A_gcj:
 if st.session_state.B_gcj:
     lng, lat = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
     folium.Marker([lat, lng], popup='终点 B', icon=folium.Icon(color='red')).add_to(m)
-# 添加无人机轨迹（最近5个点连线）
-if len(st.session_state.heartbeat_history) >= 2:
-    recent = st.session_state.heartbeat_history[:5][::-1]
-    points = []
-    for h in recent:
-        lng, lat = gcj02_to_wgs84(h['lng'], h['lat'])
-        points.append([lat, lng])
-    folium.PolyLine(points, color='cyan', weight=2, opacity=0.6, popup='飞行轨迹').add_to(m)
-# 添加无人机当前位置
+# 添加无人机
 if st.session_state.heartbeat_history:
     cur = st.session_state.heartbeat_history[0]
     lng, lat = gcj02_to_wgs84(cur['lng'], cur['lat'])
@@ -340,7 +295,7 @@ if st.session_state.heartbeat_history:
 if st.session_state.A_gcj and st.session_state.B_gcj:
     a_lng, a_lat = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
     b_lng, b_lat = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
-    folium.PolyLine([[a_lat, a_lng], [b_lat, b_lng]], color='blue', weight=3, popup='规划航线').add_to(m)
+    folium.PolyLine([[a_lat, a_lng], [b_lat, b_lng]], color='blue', weight=3).add_to(m)
 # 添加所有已保存的障碍物
 for poly_gcj in st.session_state.polygons:
     wgs_poly = []
@@ -349,7 +304,7 @@ for poly_gcj in st.session_state.polygons:
         wgs_poly.append([wlat, wlng])
     folium.Polygon(wgs_poly, color='red', fill=True, fill_opacity=0.4, weight=2).add_to(m)
 
-# 添加绘图控件
+# 添加绘图控件 (Draw)
 draw = Draw(
     draw_options={
         'polygon': {'allowIntersection': False, 'showArea': True},
@@ -363,6 +318,7 @@ draw = Draw(
 )
 draw.add_to(m)
 
+# 显示地图并捕获交互（点击和绘制）
 output = st_folium(m, width=1200, height=600, key="main_map", returned_objects=["last_click", "last_draw"])
 
 # 处理地图点击（坐标拾取）
@@ -374,19 +330,20 @@ if output and output.get("last_click"):
         st.session_state.clicked_coord = (gcj_lng, gcj_lat)
         st.rerun()
 
-# 处理地图绘制（多边形圈选）
+# 处理地图绘制（多边形圈选）—— 自动保存最新绘制的坐标
 if output and output.get("last_draw"):
     draw_data = output["last_draw"]
     if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
-        coords = draw_data["geometry"]["coordinates"][0]
+        coords = draw_data["geometry"]["coordinates"][0]  # [[lng, lat], ...]
         if len(coords) >= 3:
             st.session_state.last_drawn_coords = coords
+            # 给出提示（但不自动保存）
             st.sidebar.success("已捕获多边形，点击「添加障碍物（从当前圈选）」保存")
 
+# 底部说明
 st.caption("✅ 使用说明：\n"
            "1. **地图圈选**：使用左上角多边形工具绘制 → 侧边栏点击「添加障碍物（从当前圈选）」保存。\n"
            "2. **手动输入**：在侧边栏文本框输入顶点（GCJ-02坐标，每行 经度,纬度）→ 点击「添加障碍物（手动输入）」保存。\n"
            "3. **坐标拾取**：点击地图任意位置，侧边栏会显示GCJ-02坐标，可一键添加到手动输入框。\n"
-           "4. **心跳可视化**：侧边栏显示实时距离、速度、高度进度条；主区域显示高度历史折线图；地图上显示无人机轨迹。\n"
-           "5. 起点/终点通过手动输入经纬度设置。\n"
-           "6. 所有障碍物可保存/加载/清除/下载。")
+           "4. 起点/终点通过手动输入经纬度设置。\n"
+           "5. 所有障碍物可保存/加载/清除/下载。")
