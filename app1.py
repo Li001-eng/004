@@ -1,6 +1,6 @@
 import streamlit as st
 import folium
-from streamlit_folium import folium_static
+from streamlit_folium import st_folium
 import numpy as np
 import json
 import os
@@ -48,7 +48,7 @@ def gcj02_to_wgs84(lng, lat):
     return lng - dlng, lat - dlat
 
 # ==================== 模拟心跳包 ====================
-def update_heartbeat():
+def get_next_heartbeat():
     if 'drone_pos_gcj' not in st.session_state:
         st.session_state.drone_pos_gcj = (118.7492, 32.2328)
     if 'heartbeat_history' not in st.session_state:
@@ -72,197 +72,179 @@ def update_heartbeat():
 
 # ==================== 障碍物持久化 ====================
 CONFIG_FILE = "obstacle_config.json"
-
-def save_polygons():
-    data = {
-        "version": "v12.2",
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "polygons": st.session_state.polygons
-    }
+def save_polygons_to_file():
+    data = {"version": "v12.2", "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "polygons": st.session_state.polygons}
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     st.success(f"已保存 {len(st.session_state.polygons)} 个障碍物")
-
-def load_polygons():
+def load_polygons_from_file():
     if not os.path.exists(CONFIG_FILE):
-        st.error("配置文件不存在，请先保存")
+        st.error("配置文件不存在")
         return
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
     st.session_state.polygons = data.get("polygons", [])
     st.success(f"已加载 {len(st.session_state.polygons)} 个障碍物")
-
-def clear_polygons():
+def clear_all_obstacles():
     st.session_state.polygons = []
     st.success("已清除所有障碍物")
+def one_click_deploy():
+    st.session_state.polygons = [
+        [[118.7485, 32.2325], [118.7490, 32.2327], [118.7488, 32.2330]],
+        [[118.7495, 32.2335], [118.7500, 32.2332], [118.7498, 32.2338]],
+        [[118.7480, 32.2340], [118.7485, 32.2342], [118.7482, 32.2345]]
+    ]
+    st.success("已部署预设障碍物")
 
 # ==================== 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划系统")
+st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 点击设置+手动输入")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("卫星地图 | GCJ-02坐标自动转换 | 手动输入障碍物坐标")
+st.markdown("**卫星地图 + GCJ-02坐标** | **点击地图设置起点/终点（或手动输入）** | **绘制多边形添加障碍物**")
 
 # 初始化
-if 'polygons' not in st.session_state:
-    st.session_state.polygons = []
-if 'A_gcj' not in st.session_state:
-    st.session_state.A_gcj = None
-if 'B_gcj' not in st.session_state:
-    st.session_state.B_gcj = None
-if 'flight_height' not in st.session_state:
-    st.session_state.flight_height = 50
-if 'drone_pos_gcj' not in st.session_state:
-    st.session_state.drone_pos_gcj = (118.7492, 32.2328)
-if 'heartbeat_history' not in st.session_state:
-    st.session_state.heartbeat_history = []
+for key in ['polygons', 'A_gcj', 'B_gcj', 'flight_height', 'drone_pos_gcj', 'heartbeat_history', 'set_mode']:
+    if key not in st.session_state:
+        if key == 'polygons': st.session_state.polygons = []
+        elif key == 'A_gcj': st.session_state.A_gcj = None
+        elif key == 'B_gcj': st.session_state.B_gcj = None
+        elif key == 'flight_height': st.session_state.flight_height = 50
+        elif key == 'drone_pos_gcj': st.session_state.drone_pos_gcj = (118.7492, 32.2328)
+        elif key == 'heartbeat_history': st.session_state.heartbeat_history = []
+        elif key == 'set_mode': st.session_state.set_mode = "起点A"
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
     st.header("🎮 控制面板")
+    st.subheader("📍 地图点击模式")
+    mode = st.radio("点击地图设置:", ["起点A", "终点B"], index=0 if st.session_state.set_mode=="起点A" else 1)
+    st.session_state.set_mode = mode
     
-    st.subheader("📍 起点A (GCJ-02)")
+    # 手动输入坐标作为备选（100%可靠）
+    st.subheader("✏️ 手动设置坐标 (GCJ-02)")
     col1, col2 = st.columns(2)
     with col1:
-        a_lat = st.number_input("纬度", value=32.2323, format="%.6f", key="a_lat")
+        manual_lat = st.number_input("纬度", value=32.2323, format="%.6f", key="manual_lat")
     with col2:
-        a_lng = st.number_input("经度", value=118.7490, format="%.6f", key="a_lng")
-    if st.button("设置A点", key="set_A"):
-        st.session_state.A_gcj = (a_lng, a_lat)
-        st.rerun()
+        manual_lng = st.number_input("经度", value=118.7490, format="%.6f", key="manual_lng")
+    if st.button("设置选中的点"):
+        if st.session_state.set_mode == "起点A":
+            st.session_state.A_gcj = (manual_lng, manual_lat)
+            st.success(f"起点A已手动设置: ({manual_lng}, {manual_lat})")
+        else:
+            st.session_state.B_gcj = (manual_lng, manual_lat)
+            st.success(f"终点B已手动设置: ({manual_lng}, {manual_lat})")
     
-    st.subheader("🏁 终点B (GCJ-02)")
-    col3, col4 = st.columns(2)
-    with col3:
-        b_lat = st.number_input("纬度", value=32.2344, format="%.6f", key="b_lat")
-    with col4:
-        b_lng = st.number_input("经度", value=118.7490, format="%.6f", key="b_lng")
-    if st.button("设置B点", key="set_B"):
-        st.session_state.B_gcj = (b_lng, b_lat)
-        st.rerun()
-    
+    # 显示当前坐标
     st.markdown("---")
+    st.subheader("📍 当前坐标 (GCJ-02)")
     if st.session_state.A_gcj:
         st.info(f"起点A: {st.session_state.A_gcj[0]:.6f}, {st.session_state.A_gcj[1]:.6f}")
     if st.session_state.B_gcj:
         st.info(f"终点B: {st.session_state.B_gcj[0]:.6f}, {st.session_state.B_gcj[1]:.6f}")
     
+    st.markdown("---")
     st.subheader("🚁 飞行参数")
-    new_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height_input")
-    st.session_state.flight_height = new_height
+    st.session_state.flight_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5)
     
+    st.markdown("---")
     st.subheader("💓 心跳包")
-    if st.button("📡 获取最新心跳", key="heartbeat"):
-        update_heartbeat()
+    if st.button("📡 获取最新心跳"):
+        get_next_heartbeat()
         st.rerun()
     if st.session_state.heartbeat_history:
         cur = st.session_state.heartbeat_history[0]
-        st.metric("无人机位置 (GCJ-02)", f"{cur['lng']:.5f}, {cur['lat']:.5f}")
+        st.metric("无人机位置", f"{cur['lng']:.5f}, {cur['lat']:.5f}")
         st.caption(f"高度: {cur['alt']}m | {cur['timestamp']}")
     
     st.markdown("---")
-    st.subheader("🛑 障碍物管理")
-    
-    # 手动输入多边形顶点
-    st.markdown("**手动输入障碍物坐标 (GCJ-02)**")
-    st.markdown("每行一个顶点：经度,纬度（至少3行）")
-    poly_text = st.text_area("多边形顶点", height=150, key="poly_input",
-                             placeholder="118.7485,32.2325\n118.7490,32.2327\n118.7488,32.2330")
-    if st.button("➕ 添加障碍物", key="add_obstacle"):
-        try:
-            coords = []
-            for line in poly_text.strip().split('\n'):
-                if line.strip():
-                    lng, lat = map(float, line.split(','))
-                    coords.append([lng, lat])
-            if len(coords) >= 3:
-                st.session_state.polygons.append(coords)
-                st.success(f"已添加障碍物，当前总数: {len(st.session_state.polygons)}")
-                st.rerun()
-            else:
-                st.error("至少需要3个顶点")
-        except Exception as e:
-            st.error(f"格式错误: {e}")
-    
-    st.info(f"当前障碍物数量: {len(st.session_state.polygons)}")
-    
+    st.subheader("🛑 障碍物配置")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("💾 保存到文件", key="save"):
-            save_polygons()
+        if st.button("💾 保存到文件"): save_polygons_to_file()
     with col2:
-        if st.button("📂 从文件加载", key="load"):
-            load_polygons()
+        if st.button("📂 从文件加载"): load_polygons_from_file()
     col3, col4 = st.columns(2)
     with col3:
-        if st.button("🗑️ 清除全部", key="clear"):
-            clear_polygons()
-            st.rerun()
+        if st.button("🗑️ 清除全部"): clear_all_obstacles()
     with col4:
-        if st.button("🚀 一键部署", key="deploy"):
-            st.session_state.polygons = [
-                [[118.7485, 32.2325], [118.7490, 32.2327], [118.7488, 32.2330]],
-                [[118.7495, 32.2335], [118.7500, 32.2332], [118.7498, 32.2338]]
-            ]
-            st.success("已部署预设障碍物")
-            st.rerun()
-    
+        if st.button("🚀 一键部署"): one_click_deploy()
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "rb") as f:
-            st.download_button("📥 下载配置文件", data=f, file_name="obstacle_config.json", mime="application/json", key="download")
+            st.download_button("📥 下载配置", data=f, file_name="obstacle_config.json", mime="application/json")
+    st.info(f"当前障碍物数量: {len(st.session_state.polygons)}")
+    st.caption("提示：如果地图点击无效，请使用手动输入。")
 
-# ==================== 地图显示 ====================
-# 计算中心点
+# ==================== 构建地图 ====================
+# 计算中心点（WGS84）
 if st.session_state.A_gcj and st.session_state.B_gcj:
-    center_gcj = ((st.session_state.A_gcj[0] + st.session_state.B_gcj[0]) / 2,
-                  (st.session_state.A_gcj[1] + st.session_state.B_gcj[1]) / 2)
+    center_gcj = ((st.session_state.A_gcj[0]+st.session_state.B_gcj[0])/2, (st.session_state.A_gcj[1]+st.session_state.B_gcj[1])/2)
 elif st.session_state.A_gcj:
     center_gcj = st.session_state.A_gcj
 elif st.session_state.B_gcj:
     center_gcj = st.session_state.B_gcj
 else:
     center_gcj = (118.7492, 32.2332)
-center_wgs_lng, center_wgs_lat = gcj02_to_wgs84(center_gcj[0], center_gcj[1])
-center = [center_wgs_lat, center_wgs_lng]
+center_wgs = gcj02_to_wgs84(center_gcj[0], center_gcj[1])
 
-# 创建地图（卫星图 + OSM标注）
-m = folium.Map(location=center, zoom_start=17,
+m = folium.Map(location=[center_wgs[1], center_wgs[0]], zoom_start=17,
                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
                attr='Esri World Imagery')
 folium.TileLayer('openstreetmap', opacity=0.5).add_to(m)
 
-# 添加起点/终点/无人机/航线/障碍物
+# 添加 A/B/无人机/航线/障碍物
 if st.session_state.A_gcj:
-    lng, lat = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
-    folium.Marker([lat, lng], popup='起点 A', icon=folium.Icon(color='green')).add_to(m)
+    a_wgs = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
+    folium.Marker([a_wgs[1], a_wgs[0]], popup='起点 A', icon=folium.Icon(color='green')).add_to(m)
 if st.session_state.B_gcj:
-    lng, lat = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
-    folium.Marker([lat, lng], popup='终点 B', icon=folium.Icon(color='red')).add_to(m)
+    b_wgs = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
+    folium.Marker([b_wgs[1], b_wgs[0]], popup='终点 B', icon=folium.Icon(color='red')).add_to(m)
 if st.session_state.heartbeat_history:
-    cur = st.session_state.heartbeat_history[0]
-    lng, lat = gcj02_to_wgs84(cur['lng'], cur['lat'])
-    folium.Marker([lat, lng], popup='无人机', icon=folium.Icon(color='blue', icon='plane', prefix='fa')).add_to(m)
+    drone_gcj = (st.session_state.heartbeat_history[0]['lng'], st.session_state.heartbeat_history[0]['lat'])
+    drone_wgs = gcj02_to_wgs84(drone_gcj[0], drone_gcj[1])
+    folium.Marker([drone_wgs[1], drone_wgs[0]], popup='无人机', icon=folium.Icon(color='blue', icon='plane', prefix='fa')).add_to(m)
 if st.session_state.A_gcj and st.session_state.B_gcj:
-    a_lng, a_lat = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
-    b_lng, b_lat = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
-    folium.PolyLine([[a_lat, a_lng], [b_lat, b_lng]], color='blue', weight=3).add_to(m)
+    a_wgs = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
+    b_wgs = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
+    folium.PolyLine([[a_wgs[1], a_wgs[0]], [b_wgs[1], b_wgs[0]]], color='blue', weight=3).add_to(m)
 for poly_gcj in st.session_state.polygons:
-    wgs_poly = []
-    for lng, lat in poly_gcj:
-        wlng, wlat = gcj02_to_wgs84(lng, lat)
-        wgs_poly.append([wlat, wlng])
+    wgs_poly = [gcj02_to_wgs84(lng, lat)[::-1] for lng, lat in poly_gcj]  # 转换为 [lat, lng]
     folium.Polygon(wgs_poly, color='red', fill=True, fill_opacity=0.4, weight=2).add_to(m)
 
-# 添加绘图工具（仅用于视觉参考，不参与逻辑）
-draw = Draw(
-    draw_options={
-        'polygon': {'allowIntersection': False, 'showArea': True},
-        'polyline': False, 'rectangle': False, 'circle': False,
-        'marker': False, 'circlemarker': False
-    },
-    edit_options={'edit': True, 'remove': True}
-)
+# 添加绘图控件
+draw = Draw(draw_options={'polygon': {'allowIntersection': False, 'showArea': True}, 'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False},
+            edit_options={'edit': True, 'remove': True})
 draw.add_to(m)
 
-folium_static(m, width=1200, height=600)
+# 显示地图并捕获交互
+output = st_folium(m, width=1200, height=600, key="map_with_draw", returned_objects=["last_click", "last_draw"])
 
-# 显示所需的署名
-st.caption("Leaflet | © OpenStreetMap contributors")
+# ==================== 处理点击事件（调试版） ====================
+if output and output.get("last_click"):
+    click = output["last_click"]
+    st.sidebar.write("🔍 调试：点击返回数据:", click)  # 显示原始数据，帮助诊断
+    if click and "lng" in click and "lat" in click:
+        lng_wgs = click["lng"]
+        lat_wgs = click["lat"]
+        gcj_lng, gcj_lat = wgs84_to_gcj02(lng_wgs, lat_wgs)
+        if st.session_state.set_mode == "起点A":
+            st.session_state.A_gcj = (gcj_lng, gcj_lat)
+            st.sidebar.success(f"起点A已设置 (GCJ-02): {gcj_lng:.6f}, {gcj_lat:.6f}")
+        else:
+            st.session_state.B_gcj = (gcj_lng, gcj_lat)
+            st.sidebar.success(f"终点B已设置 (GCJ-02): {gcj_lng:.6f}, {gcj_lat:.6f}")
+        st.rerun()
+    else:
+        st.sidebar.warning("点击坐标数据不完整，请重试")
+
+# 处理多边形绘制
+if output and output.get("last_draw"):
+    draw_data = output["last_draw"]
+    if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
+        coords_wgs = draw_data["geometry"]["coordinates"][0]
+        poly_gcj = [wgs84_to_gcj02(lng, lat) for lng, lat in coords_wgs]
+        if len(poly_gcj) >= 3:
+            st.session_state.polygons.append(poly_gcj)
+            st.sidebar.success("新障碍物已添加！")
+            st.rerun()
+
+st.caption("✅ 使用说明：\n1. 左侧选择起点A/终点B，然后在地图上单击（若无效，请使用手动输入）。\n2. 使用多边形工具绘制障碍物。\n3. 心跳包点击获取最新位置。")
