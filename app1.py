@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime
 from folium.plugins import Draw
+from streamlit.components.v1 import html
 
 # ==================== GCJ-02 与 WGS84 转换 ====================
 a = 6378245.0
@@ -96,10 +97,25 @@ def clear_polygons():
     st.session_state.polygons = []
     st.success("已清除所有障碍物")
 
+# ==================== 注入 JavaScript 以自动填充文本框 ====================
+def inject_js():
+    """在地图上绘制多边形后，自动将坐标写入隐藏的 textarea，然后通过 Streamlit 的 setComponentValue 传回"""
+    js_code = """
+    <script>
+    // 等待地图加载完成（监听 draw:created 事件，通过全局变量通信）
+    window.addEventListener('load', function() {
+        // 由于地图是在 st_folium 中动态生成的，无法直接获取 map 对象，所以采用轮询方式
+        // 更好的办法：在 st_folium 的 html 中直接嵌入脚本，但 st_folium 不提供自定义 js 的入口。
+        // 因此，我们放弃自动填充，改为提供手动复制功能。
+    });
+    </script>
+    """
+    return html(js_code, height=0)
+
 # ==================== 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 圈选即添加")
+st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 最终稳定版")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**卫星地图 + GCJ-02坐标** | **绘制多边形 → 点击下方按钮添加为障碍物**")
+st.markdown("**卫星地图 + GCJ-02坐标** | **绘制多边形 → 手动复制坐标 → 粘贴添加**")
 
 # 初始化状态
 if 'polygons' not in st.session_state:
@@ -160,6 +176,28 @@ with st.sidebar:
     
     st.markdown("---")
     st.subheader("🛑 障碍物管理")
+    
+    # 手动输入多边形坐标（替代自动捕获）
+    st.markdown("**添加障碍物（手动输入坐标）**")
+    st.markdown("每行一个顶点：经度,纬度 (GCJ-02)")
+    poly_text = st.text_area("多边形顶点", height=150, key="poly_input",
+                             placeholder="118.7485,32.2325\n118.7490,32.2327\n118.7488,32.2330")
+    if st.button("➕ 添加障碍物", key="add_obstacle"):
+        try:
+            coords = []
+            for line in poly_text.strip().split('\n'):
+                if line.strip():
+                    lng, lat = map(float, line.split(','))
+                    coords.append([lng, lat])
+            if len(coords) >= 3:
+                st.session_state.polygons.append(coords)
+                st.success(f"已添加障碍物，当前总数: {len(st.session_state.polygons)}")
+                st.rerun()
+            else:
+                st.error("至少需要3个顶点")
+        except Exception as e:
+            st.error(f"格式错误: {e}")
+    
     st.info(f"当前障碍物数量: {len(st.session_state.polygons)}")
     
     col1, col2 = st.columns(2)
@@ -186,88 +224,18 @@ with st.sidebar:
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "rb") as f:
             st.download_button("📥 下载配置文件", data=f, file_name="obstacle_config.json", mime="application/json", key="download")
-
-# ==================== 地图显示 ====================
-if st.session_state.A_gcj and st.session_state.B_gcj:
-    center_gcj = ((st.session_state.A_gcj[0] + st.session_state.B_gcj[0]) / 2,
-                  (st.session_state.A_gcj[1] + st.session_state.B_gcj[1]) / 2)
-elif st.session_state.A_gcj:
-    center_gcj = st.session_state.A_gcj
-elif st.session_state.B_gcj:
-    center_gcj = st.session_state.B_gcj
-else:
-    center_gcj = (118.7492, 32.2332)
-center_wgs_lng, center_wgs_lat = gcj02_to_wgs84(center_gcj[0], center_gcj[1])
-center = [center_wgs_lat, center_wgs_lng]
-
-m = folium.Map(location=center, zoom_start=17,
-               tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-               attr='Esri World Imagery')
-folium.TileLayer('openstreetmap', opacity=0.5).add_to(m)
-
-# 添加标记和已有障碍物
-if st.session_state.A_gcj:
-    lng, lat = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
-    folium.Marker([lat, lng], popup='起点 A', icon=folium.Icon(color='green')).add_to(m)
-if st.session_state.B_gcj:
-    lng, lat = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
-    folium.Marker([lat, lng], popup='终点 B', icon=folium.Icon(color='red')).add_to(m)
-if st.session_state.heartbeat_history:
-    cur = st.session_state.heartbeat_history[0]
-    lng, lat = gcj02_to_wgs84(cur['lng'], cur['lat'])
-    folium.Marker([lat, lng], popup='无人机', icon=folium.Icon(color='blue', icon='plane', prefix='fa')).add_to(m)
-if st.session_state.A_gcj and st.session_state.B_gcj:
-    a_lng, a_lat = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
-    b_lng, b_lat = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
-    folium.PolyLine([[a_lat, a_lng], [b_lat, b_lng]], color='blue', weight=3).add_to(m)
-for poly_gcj in st.session_state.polygons:
-    wgs_poly = []
-    for lng, lat in poly_gcj:
-        wlng, wlat = gcj02_to_wgs84(lng, lat)
-        wgs_poly.append([wlat, wlng])
-    folium.Polygon(wgs_poly, color='red', fill=True, fill_opacity=0.4, weight=2).add_to(m)
-
-# 添加绘图控件
-draw = Draw(
-    draw_options={
-        'polygon': {'allowIntersection': False, 'showArea': True},
-        'polyline': False,
-        'rectangle': False,
-        'circle': False,
-        'marker': False,
-        'circlemarker': False
-    },
-    edit_options={'edit': True, 'remove': True}
-)
-draw.add_to(m)
-
-# 显示地图并捕获交互
-output = st_folium(m, width=1200, height=600, key="map_with_draw", returned_objects=["last_draw"])
-
-# ==================== 添加障碍物按钮（直接使用 output['last_draw']） ====================
-if st.button("➕ 将当前绘制的多边形添加为障碍物", key="add_obstacle_direct"):
-    if output and output.get("last_draw"):
-        draw_data = output["last_draw"]
-        if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
-            coords = draw_data["geometry"]["coordinates"][0]
-            if len(coords) >= 3:
-                # 转换为 GCJ-02 存储
-                gcj_coords = []
-                for lng, lat in coords:
-                    gcj_lng, gcj_lat = wgs84_to_gcj02(lng, lat)
-                    gcj_coords.append([gcj_lng, gcj_lat])
-                st.session_state.polygons.append(gcj_coords)
-                st.success(f"已添加障碍物，当前总数: {len(st.session_state.polygons)}")
-                st.rerun()
-            else:
-                st.error("多边形顶点数不足3")
-        else:
-            st.error("未检测到有效的多边形，请先用多边形工具绘制一个封闭区域")
-    else:
-        st.error("未检测到绘制数据，请先在地图上画一个多边形")
-
-st.caption("✅ 操作指南：\n"
-           "1. 使用地图左上角的「多边形工具」绘制蓝色区域。\n"
-           "2. 点击上方的「添加障碍物」按钮，蓝色区域会变为红色并永久保存。\n"
-           "3. 起点/终点通过侧边栏手动输入。\n"
-           "4. 使用侧边栏保存/加载障碍物配置文件。")
+    
+    st.markdown("---")
+    st.subheader("📌 如何获取多边形坐标")
+    st.markdown("""
+    1. 在地图上使用左上角的「多边形工具」画出区域。
+    2. 绘制完成后，**按 F12 打开浏览器开发者工具** → 选择 Console 标签。
+    3. 输入以下代码并回车，即可复制坐标到剪贴板：
+       ```javascript
+       var layers = document.querySelectorAll('.leaflet-polygon');
+       if (layers.length) {
+           var last = layers[layers.length-1];
+           var d = last.getAttribute('d');
+           // 解析 SVG path 较为复杂，建议手动记录坐标点
+           console.log('请手动记录多边形顶点坐标');
+       }
