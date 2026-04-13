@@ -148,8 +148,9 @@ with st.sidebar:
         st.info(f"终点B: {st.session_state.B_gcj[0]:.6f}, {st.session_state.B_gcj[1]:.6f}")
     
     st.subheader("🚁 飞行参数")
-    # 修正：直接使用 number_input 绑定 session_state，不需要再手动赋值
-    st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height")
+    # 修正：正确使用 number_input 绑定 session_state
+    new_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height_input")
+    st.session_state.flight_height = new_height
     
     st.subheader("💓 心跳包")
     if st.button("📡 获取最新心跳", key="heartbeat"):
@@ -261,7 +262,7 @@ draw.add_to(m)
 
 output = st_folium(m, width=1200, height=600, key="map_with_draw", returned_objects=["last_draw"])
 
-# 获取当前绘制按钮（放在地图下方）
+# 获取当前绘制按钮
 if st.button("📐 获取当前绘制 (从地图)", key="get_draw_actual"):
     if output and output.get("last_draw"):
         draw_data = output["last_draw"]
