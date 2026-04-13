@@ -99,7 +99,7 @@ def clear_polygons():
 # ==================== 主界面 ====================
 st.set_page_config(layout="wide", page_title="无人机障碍物规划系统")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**卫星地图 + GCJ-02坐标** | 支持地图圈选 & 手动输入障碍物")
+st.markdown("**卫星地图 | GCJ-02坐标自动转换 | 障碍物持久化 | 心跳包手动刷新（无地图闪烁）**")
 
 # 初始化状态
 if 'polygons' not in st.session_state:
@@ -119,62 +119,104 @@ if 'manual_polygon_text' not in st.session_state:
 if 'clicked_coord' not in st.session_state:
     st.session_state.clicked_coord = None
 if 'last_drawn_coords' not in st.session_state:
-    st.session_state.last_drawn_coords = None  # 存储最新绘制的多边形 (WGS84)
+    st.session_state.last_drawn_coords = None
 
-# ==================== 侧边栏 ====================
+# ==================== 侧边栏布局（按图片样式） ====================
 with st.sidebar:
-    st.header("🎮 控制面板")
+    st.header("控制面板")
     
-    # 起点A
-    st.subheader("📍 起点A (GCJ-02)")
+    # ----- 获取最新心跳按钮 -----
+    if st.button("📡 获取最新心跳", key="heartbeat", use_container_width=True):
+        update_heartbeat()
+        st.rerun()
+    
+    # ----- 最新心跳包卡片（仪表盘）-----
+    st.subheader("最新心跳包")
+    if st.session_state.heartbeat_history:
+        cur = st.session_state.heartbeat_history[0]
+        col1, col2 = st.columns(2)
+        col1.metric("经度 (GCJ-02)", f"{cur['lng']:.6f}")
+        col2.metric("纬度 (GCJ-02)", f"{cur['lat']:.6f}")
+        col3, col4 = st.columns(2)
+        col3.metric("飞行高度 (m)", f"{cur['alt']}")
+        col4.metric("时间戳", cur['timestamp'])
+    else:
+        st.info("暂无心跳数据，请点击「获取最新心跳」")
+    
+    # ----- 起点A -----
+    st.subheader("起点A (GCJ-02)")
     col1, col2 = st.columns(2)
     with col1:
         a_lat = st.number_input("纬度", value=32.2323, format="%.6f", key="a_lat")
     with col2:
         a_lng = st.number_input("经度", value=118.7490, format="%.6f", key="a_lng")
-    if st.button("设置A点", key="set_A"):
+    if st.button("设置A点", key="set_A", use_container_width=True):
         st.session_state.A_gcj = (a_lng, a_lat)
         st.rerun()
     
-    # 终点B
-    st.subheader("🏁 终点B (GCJ-02)")
-    col3, col4 = st.columns(2)
-    with col3:
+    # ----- 终点B -----
+    st.subheader("终点B (GCJ-02)")
+    col1, col2 = st.columns(2)
+    with col1:
         b_lat = st.number_input("纬度", value=32.2344, format="%.6f", key="b_lat")
-    with col4:
+    with col2:
         b_lng = st.number_input("经度", value=118.7490, format="%.6f", key="b_lng")
-    if st.button("设置B点", key="set_B"):
+    if st.button("设置B点", key="set_B", use_container_width=True):
         st.session_state.B_gcj = (b_lng, b_lat)
         st.rerun()
     
-    st.markdown("---")
-    if st.session_state.A_gcj:
-        st.info(f"起点A: {st.session_state.A_gcj[0]:.6f}, {st.session_state.A_gcj[1]:.6f}")
-    if st.session_state.B_gcj:
-        st.info(f"终点B: {st.session_state.B_gcj[0]:.6f}, {st.session_state.B_gcj[1]:.6f}")
-    
-    # 飞行参数
-    st.subheader("🚁 飞行参数")
+    # ----- 飞行参数 -----
+    st.subheader("飞行参数")
     st.session_state.flight_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height_input")
     
-    # 心跳包
-    st.subheader("💓 心跳包")
-    if st.button("📡 获取最新心跳", key="heartbeat"):
-        update_heartbeat()
-        st.rerun()
+    # ----- 心跳包历史 -----
+    st.subheader("心跳包历史（最近5次）")
     if st.session_state.heartbeat_history:
-        cur = st.session_state.heartbeat_history[0]
-        st.metric("无人机位置 (GCJ-02)", f"{cur['lng']:.5f}, {cur['lat']:.5f}")
-        st.caption(f"高度: {cur['alt']}m | {cur['timestamp']}")
+        for hb in st.session_state.heartbeat_history:
+            st.caption(f"{hb['timestamp']}  Lng:{hb['lng']:.5f}  Lat:{hb['lat']:.5f}  Alt:{hb['alt']}m")
+    else:
+        st.caption("暂无历史")
     
     st.markdown("---")
-    st.subheader("🛑 障碍物管理")
     
-    # 地图圈选添加障碍物
-    st.markdown("### 🖱️ 从地图圈选添加")
-    if st.button("➕ 添加障碍物（从当前圈选）", key="add_from_map"):
+    # ----- 障碍物配置持久化 -----
+    st.subheader("障碍物配置持久化")
+    st.caption(f"配置文件: `{os.path.abspath(CONFIG_FILE)}` | 版本: v12.2")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("💾 保存到文件", key="save", use_container_width=True):
+            save_polygons()
+    with col2:
+        if st.button("📂 从文件加载", key="load", use_container_width=True):
+            load_polygons()
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🗑️ 清除全部", key="clear", use_container_width=True):
+            clear_polygons()
+            st.rerun()
+    with col2:
+        if st.button("🚀 一键部署", key="deploy", use_container_width=True):
+            st.session_state.polygons = [
+                [[118.7485, 32.2325], [118.7490, 32.2327], [118.7488, 32.2330]],
+                [[118.7495, 32.2335], [118.7500, 32.2332], [118.7498, 32.2338]]
+            ]
+            st.success("已部署预设障碍物")
+            st.rerun()
+    
+    # 下载配置文件
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "rb") as f:
+            st.download_button("📥 下载配置文件", data=f, file_name="obstacle_config.json", mime="application/json", key="download", use_container_width=True)
+    
+    st.markdown("---")
+    
+    # ----- 障碍物添加方式（地图圈选 + 手动输入 + 坐标拾取）-----
+    st.subheader("🛑 添加障碍物")
+    
+    # 地图圈选
+    st.markdown("**从地图圈选**")
+    if st.button("➕ 添加障碍物（从当前圈选）", key="add_from_map", use_container_width=True):
         if st.session_state.last_drawn_coords and len(st.session_state.last_drawn_coords) >= 3:
-            # 转换为 GCJ-02 存储
             gcj_coords = []
             for lng, lat in st.session_state.last_drawn_coords:
                 gcj_lng, gcj_lat = wgs84_to_gcj02(lng, lat)
@@ -186,14 +228,13 @@ with st.sidebar:
         else:
             st.warning("请先在地图上绘制一个多边形（使用左上角多边形工具）")
     
-    # 手动输入障碍物
-    st.markdown("### ✏️ 手动输入顶点 (GCJ-02)")
-    st.markdown("每行一个顶点：经度,纬度（至少3行）")
-    manual_input = st.text_area("多边形顶点", height=150, key="manual_input",
+    # 手动输入
+    st.markdown("**手动输入顶点 (GCJ-02)**")
+    manual_input = st.text_area("多边形顶点（每行 经度,纬度）", height=120, key="manual_input",
                                 value=st.session_state.manual_polygon_text,
                                 placeholder="118.7485,32.2325\n118.7490,32.2327\n118.7488,32.2330")
     st.session_state.manual_polygon_text = manual_input
-    if st.button("➕ 添加障碍物（手动输入）", key="add_manual"):
+    if st.button("➕ 添加障碍物（手动输入）", key="add_manual", use_container_width=True):
         try:
             lines = manual_input.strip().split('\n')
             coords = []
@@ -204,19 +245,19 @@ with st.sidebar:
             if len(coords) >= 3:
                 st.session_state.polygons.append(coords)
                 st.success(f"已添加手动障碍物，当前总数: {len(st.session_state.polygons)}")
-                st.session_state.manual_polygon_text = ""  # 清空
+                st.session_state.manual_polygon_text = ""
                 st.rerun()
             else:
                 st.error("至少需要3个顶点")
         except Exception as e:
             st.error(f"格式错误: {e}")
     
-    # 坐标拾取辅助（点击地图显示坐标）
-    st.markdown("### 📍 坐标拾取辅助")
-    st.markdown("点击地图任意位置获取GCJ-02坐标")
+    # 坐标拾取辅助
+    st.markdown("**坐标拾取辅助**")
+    st.caption("点击地图任意位置获取GCJ-02坐标")
     if st.session_state.clicked_coord:
         st.info(f"点击坐标: 经度 {st.session_state.clicked_coord[0]:.6f}, 纬度 {st.session_state.clicked_coord[1]:.6f}")
-        if st.button("➕ 添加为多边形顶点", key="add_coord"):
+        if st.button("➕ 添加为多边形顶点", key="add_coord", use_container_width=True):
             new_line = f"{st.session_state.clicked_coord[0]:.6f},{st.session_state.clicked_coord[1]:.6f}"
             if st.session_state.manual_polygon_text:
                 st.session_state.manual_polygon_text += "\n" + new_line
@@ -224,39 +265,9 @@ with st.sidebar:
                 st.session_state.manual_polygon_text = new_line
             st.rerun()
     else:
-        st.caption("点击地图后坐标会显示在这里")
+        st.caption("尚未点击地图")
     
-    st.info(f"当前障碍物数量: {len(st.session_state.polygons)}")
-    
-    # 障碍物持久化操作
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("💾 保存到文件", key="save"):
-            save_polygons()
-    with col2:
-        if st.button("📂 从文件加载", key="load"):
-            load_polygons()
-    col3, col4 = st.columns(2)
-    with col3:
-        if st.button("🗑️ 清除全部", key="clear"):
-            clear_polygons()
-            st.rerun()
-    with col4:
-        if st.button("🚀 一键部署", key="deploy"):
-            st.session_state.polygons = [
-                [[118.7485, 32.2325], [118.7490, 32.2327], [118.7488, 32.2330]],
-                [[118.7495, 32.2335], [118.7500, 32.2332], [118.7498, 32.2338]]
-            ]
-            st.success("已部署预设障碍物")
-            st.rerun()
-    
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "rb") as f:
-            st.download_button("📥 下载配置文件", data=f, file_name="obstacle_config.json", mime="application/json", key="download")
-    
-    # 显示配置文件路径
-    st.markdown("---")
-    st.caption(f"配置文件: `{os.path.abspath(CONFIG_FILE)}` | 版本: v12.2")
+    st.info(f"当前障碍物总数: {len(st.session_state.polygons)}")
 
 # ==================== 地图显示 ====================
 # 计算地图中心点 (WGS84)
@@ -334,14 +345,13 @@ if output and output.get("last_click"):
 if output and output.get("last_draw"):
     draw_data = output["last_draw"]
     if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
-        coords = draw_data["geometry"]["coordinates"][0]  # [[lng, lat], ...]
+        coords = draw_data["geometry"]["coordinates"][0]
         if len(coords) >= 3:
             st.session_state.last_drawn_coords = coords
-            # 给出提示（但不自动保存）
             st.sidebar.success("已捕获多边形，点击「添加障碍物（从当前圈选）」保存")
 
 # 底部说明
-st.caption("✅ 使用说明：\n"
+st.caption("✅ 操作指南：\n"
            "1. **地图圈选**：使用左上角多边形工具绘制 → 侧边栏点击「添加障碍物（从当前圈选）」保存。\n"
            "2. **手动输入**：在侧边栏文本框输入顶点（GCJ-02坐标，每行 经度,纬度）→ 点击「添加障碍物（手动输入）」保存。\n"
            "3. **坐标拾取**：点击地图任意位置，侧边栏会显示GCJ-02坐标，可一键添加到手动输入框。\n"
