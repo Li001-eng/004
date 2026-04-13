@@ -148,7 +148,8 @@ with st.sidebar:
         st.info(f"终点B: {st.session_state.B_gcj[0]:.6f}, {st.session_state.B_gcj[1]:.6f}")
     
     st.subheader("🚁 飞行参数")
-    st.session_state.flight_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height")
+    # 修正：直接使用 number_input 绑定 session_state，不需要再手动赋值
+    st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height")
     
     st.subheader("💓 心跳包")
     if st.button("📡 获取最新心跳", key="heartbeat"):
@@ -161,9 +162,6 @@ with st.sidebar:
     
     st.markdown("---")
     st.subheader("🛑 障碍物管理")
-    
-    # 获取当前绘制按钮（实际在地图下方定义，但这里先占位）
-    # 为了避免重复ID，我们只在地图下方定义一个实际按钮，这里不再重复
     
     if st.button("➕ 添加障碍物", key="add_obstacle"):
         if st.session_state.pending_draw and len(st.session_state.pending_draw) >= 3:
@@ -263,7 +261,7 @@ draw.add_to(m)
 
 output = st_folium(m, width=1200, height=600, key="map_with_draw", returned_objects=["last_draw"])
 
-# 获取当前绘制按钮（放在地图下方，确保output已定义）
+# 获取当前绘制按钮（放在地图下方）
 if st.button("📐 获取当前绘制 (从地图)", key="get_draw_actual"):
     if output and output.get("last_draw"):
         draw_data = output["last_draw"]
