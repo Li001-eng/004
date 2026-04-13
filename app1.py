@@ -116,12 +116,10 @@ if 'heartbeat_history' not in st.session_state:
     st.session_state.heartbeat_history = []
 if 'manual_polygon_text' not in st.session_state:
     st.session_state.manual_polygon_text = ""
-if 'clicked_coord' not in st.session_state:
-    st.session_state.clicked_coord = None
 if 'last_drawn_coords' not in st.session_state:
     st.session_state.last_drawn_coords = None
 
-# ==================== 侧边栏布局（按图片样式） ====================
+# ==================== 侧边栏布局 ====================
 with st.sidebar:
     st.header("控制面板")
     
@@ -210,7 +208,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # ----- 障碍物添加方式（地图圈选 + 手动输入 + 坐标拾取）-----
+    # ----- 添加障碍物（地图圈选 + 手动输入）-----
     st.subheader("🛑 添加障碍物")
     
     # 地图圈选
@@ -251,21 +249,6 @@ with st.sidebar:
                 st.error("至少需要3个顶点")
         except Exception as e:
             st.error(f"格式错误: {e}")
-    
-    # 坐标拾取辅助
-    st.markdown("**坐标拾取辅助**")
-    st.caption("点击地图任意位置获取GCJ-02坐标")
-    if st.session_state.clicked_coord:
-        st.info(f"点击坐标: 经度 {st.session_state.clicked_coord[0]:.6f}, 纬度 {st.session_state.clicked_coord[1]:.6f}")
-        if st.button("➕ 添加为多边形顶点", key="add_coord", use_container_width=True):
-            new_line = f"{st.session_state.clicked_coord[0]:.6f},{st.session_state.clicked_coord[1]:.6f}"
-            if st.session_state.manual_polygon_text:
-                st.session_state.manual_polygon_text += "\n" + new_line
-            else:
-                st.session_state.manual_polygon_text = new_line
-            st.rerun()
-    else:
-        st.caption("尚未点击地图")
     
     st.info(f"当前障碍物总数: {len(st.session_state.polygons)}")
 
@@ -329,17 +312,8 @@ draw = Draw(
 )
 draw.add_to(m)
 
-# 显示地图并捕获交互（点击和绘制）
-output = st_folium(m, width=1200, height=600, key="main_map", returned_objects=["last_click", "last_draw"])
-
-# 处理地图点击（坐标拾取）
-if output and output.get("last_click"):
-    click = output["last_click"]
-    if click and "lng" in click and "lat" in click:
-        wgs_lng, wgs_lat = click["lng"], click["lat"]
-        gcj_lng, gcj_lat = wgs84_to_gcj02(wgs_lng, wgs_lat)
-        st.session_state.clicked_coord = (gcj_lng, gcj_lat)
-        st.rerun()
+# 显示地图并捕获交互（仅捕获绘制，不再捕获点击）
+output = st_folium(m, width=1200, height=600, key="main_map", returned_objects=["last_draw"])
 
 # 处理地图绘制（多边形圈选）—— 自动保存最新绘制的坐标
 if output and output.get("last_draw"):
@@ -354,6 +328,5 @@ if output and output.get("last_draw"):
 st.caption("✅ 操作指南：\n"
            "1. **地图圈选**：使用左上角多边形工具绘制 → 侧边栏点击「添加障碍物（从当前圈选）」保存。\n"
            "2. **手动输入**：在侧边栏文本框输入顶点（GCJ-02坐标，每行 经度,纬度）→ 点击「添加障碍物（手动输入）」保存。\n"
-           "3. **坐标拾取**：点击地图任意位置，侧边栏会显示GCJ-02坐标，可一键添加到手动输入框。\n"
-           "4. 起点/终点通过手动输入经纬度设置。\n"
-           "5. 所有障碍物可保存/加载/清除/下载。")
+           "3. 起点/终点通过手动输入经纬度设置。\n"
+           "4. 所有障碍物可保存/加载/清除/下载。")
