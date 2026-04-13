@@ -96,9 +96,9 @@ def clear_polygons():
     st.success("已清除所有障碍物")
 
 # ==================== 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 手动输入障碍物")
+st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 稳定手动版")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**卫星地图 + GCJ-02坐标** | **手动输入障碍物多边形（可靠）**")
+st.markdown("**卫星地图 + GCJ-02坐标** | **手动输入障碍物多边形（100%可靠）**")
 
 # 初始化状态
 if 'polygons' not in st.session_state:
