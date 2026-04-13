@@ -97,9 +97,9 @@ def clear_polygons():
     st.success("已清除所有障碍物")
 
 # ==================== 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 地图圈选+按钮")
+st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 稳定版")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**卫星地图 + GCJ-02坐标** | **绘制多边形 → 点击「添加障碍物」按钮保存**")
+st.markdown("**卫星地图 + GCJ-02坐标** | **绘制多边形 → 点击「获取当前绘制」→ 点击「添加障碍物」**")
 
 # 初始化状态
 if 'polygons' not in st.session_state:
@@ -114,8 +114,8 @@ if 'drone_pos_gcj' not in st.session_state:
     st.session_state.drone_pos_gcj = (118.7492, 32.2328)
 if 'heartbeat_history' not in st.session_state:
     st.session_state.heartbeat_history = []
-if 'last_drawn_coords' not in st.session_state:
-    st.session_state.last_drawn_coords = None  # 存储 WGS84 坐标 [[lng, lat], ...]
+if 'pending_draw' not in st.session_state:
+    st.session_state.pending_draw = None  # 暂存用户绘制的多边形 (WGS84 坐标)
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
@@ -166,20 +166,25 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🛑 障碍物管理")
     
+    # 两个关键按钮：获取当前绘制、添加障碍物
+    if st.button("📐 获取当前绘制 (从地图)"):
+        # 这个按钮需要配合地图的 output，我们在地图显示之后才能获取，所以放在下面
+        pass  # 实际逻辑在地图部分处理，因为需要 output 对象
+    
     # 添加障碍物按钮
-    if st.button("➕ 添加障碍物（从当前圈选）"):
-        if st.session_state.last_drawn_coords and len(st.session_state.last_drawn_coords) >= 3:
-            # 将 WGS84 坐标转换为 GCJ-02 存储
+    if st.button("➕ 添加障碍物"):
+        if st.session_state.pending_draw and len(st.session_state.pending_draw) >= 3:
+            # 转换 GCJ-02 并存储
             gcj_coords = []
-            for lng, lat in st.session_state.last_drawn_coords:
+            for lng, lat in st.session_state.pending_draw:
                 gcj_lng, gcj_lat = wgs84_to_gcj02(lng, lat)
                 gcj_coords.append([gcj_lng, gcj_lat])
             st.session_state.polygons.append(gcj_coords)
             st.success(f"已添加障碍物，当前总数: {len(st.session_state.polygons)}")
-            st.session_state.last_drawn_coords = None  # 清空暂存
+            st.session_state.pending_draw = None
             st.rerun()
         else:
-            st.warning("请先在地图上绘制一个多边形（至少3个点）")
+            st.warning("请先点击「获取当前绘制」从地图捕获多边形")
     
     st.info(f"当前障碍物数量: {len(st.session_state.polygons)}")
     
@@ -208,13 +213,13 @@ with st.sidebar:
         with open(CONFIG_FILE, "rb") as f:
             st.download_button("📥 下载配置文件", data=f, file_name="obstacle_config.json", mime="application/json")
     
-    # 调试信息（显示最后绘制的坐标，帮助诊断）
+    # 显示暂存的多边形（调试）
     st.markdown("---")
-    st.subheader("🔍 调试")
-    st.write("最后绘制的多边形 (WGS84):", st.session_state.last_drawn_coords)
+    st.subheader("🔍 暂存的多边形 (WGS84)")
+    st.write(st.session_state.pending_draw)
 
 # ==================== 地图显示 ====================
-# 计算地图中心点（WGS84）
+# 计算地图中心点
 if st.session_state.A_gcj and st.session_state.B_gcj:
     center_gcj = ((st.session_state.A_gcj[0] + st.session_state.B_gcj[0]) / 2,
                   (st.session_state.A_gcj[1] + st.session_state.B_gcj[1]) / 2)
@@ -225,9 +230,9 @@ elif st.session_state.B_gcj:
 else:
     center_gcj = (118.7492, 32.2332)
 center_wgs_lng, center_wgs_lat = gcj02_to_wgs84(center_gcj[0], center_gcj[1])
-center = [center_wgs_lat, center_wgs_lng]  # [lat, lng]
+center = [center_wgs_lat, center_wgs_lng]
 
-# 创建底图（Esri 卫星图 + OSM 半透明标注）
+# 创建地图
 m = folium.Map(location=center, zoom_start=17,
                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
                attr='Esri World Imagery')
@@ -255,7 +260,7 @@ if st.session_state.A_gcj and st.session_state.B_gcj:
     b_lng, b_lat = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
     folium.PolyLine([[a_lat, a_lng], [b_lat, b_lng]], color='blue', weight=3).add_to(m)
 
-# 添加已保存的障碍物（多边形）
+# 添加已保存的障碍物
 for poly_gcj in st.session_state.polygons:
     wgs_poly = []
     for lng, lat in poly_gcj:
@@ -263,7 +268,7 @@ for poly_gcj in st.session_state.polygons:
         wgs_poly.append([wlat, wlng])
     folium.Polygon(wgs_poly, color='red', fill=True, fill_opacity=0.4, weight=2).add_to(m)
 
-# 添加绘图控件（Draw）
+# 添加绘图控件
 draw = Draw(
     draw_options={
         'polygon': {'allowIntersection': False, 'showArea': True},
@@ -277,28 +282,30 @@ draw = Draw(
 )
 draw.add_to(m)
 
-# 捕获地图交互（last_draw）
-output = st_folium(m, width=1200, height=600, key="main_map", returned_objects=["last_draw"])
+# 显示地图并捕获交互
+output = st_folium(m, width=1200, height=600, key="map_with_draw", returned_objects=["last_draw"])
 
-# ==================== 处理绘制的多边形 ====================
-if output and output.get("last_draw"):
-    draw_data = output["last_draw"]
-    if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
-        # 提取外环坐标（WGS84 经纬度）
-        coords = draw_data["geometry"]["coordinates"][0]  # 格式 [[lng, lat], ...]
-        if len(coords) >= 3:
-            st.session_state.last_drawn_coords = coords
-            st.sidebar.success("已捕获多边形，请点击「添加障碍物」保存")
+# ==================== 手动获取当前绘制 ====================
+# 这里放置一个按钮，用户点击时从 output 中读取 last_draw 并存入 pending_draw
+if st.sidebar.button("📐 获取当前绘制 (从地图)"):
+    if output and output.get("last_draw"):
+        draw_data = output["last_draw"]
+        if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
+            coords = draw_data["geometry"]["coordinates"][0]  # [[lng, lat], ...]
+            if len(coords) >= 3:
+                st.session_state.pending_draw = coords
+                st.sidebar.success("已获取多边形，请点击「添加障碍物」保存")
+            else:
+                st.sidebar.warning("多边形顶点数不足3")
         else:
-            st.sidebar.warning("多边形顶点数不足3")
+            st.sidebar.warning("未检测到有效的多边形，请先用绘图工具画一个")
     else:
-        # 不是多边形，清除暂存
-        st.session_state.last_drawn_coords = None
+        st.sidebar.warning("未检测到绘制数据，请先在地图上画一个多边形")
 
 # 底部说明
-st.caption("✅ 操作指南：\n"
+st.caption("✅ 操作流程：\n"
            "1. 使用地图左上角的「多边形工具」绘制障碍物区域。\n"
-           "2. 绘制完成后，在左侧侧边栏点击「添加障碍物」按钮保存。\n"
-           "3. 可多次绘制并保存多个障碍物。\n"
-           "4. 使用「保存到文件」将障碍物持久化。\n"
-           "5. 起点/终点通过手动输入经纬度设置（稳定可靠）。")
+           "2. 点击侧边栏的「获取当前绘制 (从地图)」按钮。\n"
+           "3. 点击「添加障碍物」按钮保存。\n"
+           "4. 可多次重复以上步骤添加多个障碍物。\n"
+           "5. 起点/终点通过手动输入经纬度设置。")
