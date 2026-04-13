@@ -97,9 +97,9 @@ def clear_polygons():
     st.success("已清除所有障碍物")
 
 # ==================== 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 双模式添加")
+st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 坐标拾取辅助")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**卫星地图 + GCJ-02坐标** | **支持地图圈选 & 手动输入经纬度**")
+st.markdown("**卫星地图 + GCJ-02坐标** | **支持地图圈选、手动输入、点击拾取坐标**")
 
 # 初始化状态
 if 'polygons' not in st.session_state:
@@ -116,6 +116,10 @@ if 'heartbeat_history' not in st.session_state:
     st.session_state.heartbeat_history = []
 if 'pending_draw' not in st.session_state:
     st.session_state.pending_draw = None
+if 'manual_polygon_text' not in st.session_state:
+    st.session_state.manual_polygon_text = ""  # 存储手动输入的多边形文本
+if 'clicked_coord' not in st.session_state:
+    st.session_state.clicked_coord = None  # 存储最近点击的坐标 (GCJ-02)
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
@@ -184,8 +188,11 @@ with st.sidebar:
     # ========= 方式2：手动输入经纬度 =========
     st.markdown("### ✏️ 方式二：手动输入经纬度 (GCJ-02)")
     st.markdown("每行一个顶点：经度,纬度（至少3行）")
+    # 使用会话状态中的文本，以便可以动态追加
     manual_poly_input = st.text_area("多边形顶点", height=150, key="manual_poly_input",
+                                     value=st.session_state.manual_polygon_text,
                                      placeholder="118.7485,32.2325\n118.7490,32.2327\n118.7488,32.2330")
+    st.session_state.manual_polygon_text = manual_poly_input
     if st.button("➕ 添加障碍物（手动输入）", key="add_manual"):
         try:
             lines = manual_poly_input.strip().split('\n')
@@ -197,11 +204,28 @@ with st.sidebar:
             if len(coords) >= 3:
                 st.session_state.polygons.append(coords)
                 st.success(f"已添加手动障碍物，当前总数: {len(st.session_state.polygons)}")
+                st.session_state.manual_polygon_text = ""  # 清空文本框
                 st.rerun()
             else:
                 st.error("至少需要3个顶点")
         except Exception as e:
             st.error(f"格式错误: {e}")
+    
+    # ========= 坐标拾取辅助工具 =========
+    st.markdown("### 📍 坐标拾取辅助")
+    st.markdown("点击地图上的位置，获取GCJ-02坐标")
+    if st.session_state.clicked_coord:
+        st.info(f"最近点击: 经度 {st.session_state.clicked_coord[0]:.6f}, 纬度 {st.session_state.clicked_coord[1]:.6f}")
+        if st.button("➕ 添加为多边形顶点", key="add_clicked_to_manual"):
+            # 将点击的坐标追加到手动输入文本框
+            new_line = f"{st.session_state.clicked_coord[0]:.6f},{st.session_state.clicked_coord[1]:.6f}"
+            if st.session_state.manual_polygon_text:
+                st.session_state.manual_polygon_text += "\n" + new_line
+            else:
+                st.session_state.manual_polygon_text = new_line
+            st.rerun()
+    else:
+        st.caption("点击地图后，坐标会显示在这里")
     
     st.info(f"当前障碍物数量: {len(st.session_state.polygons)}")
     
@@ -252,6 +276,7 @@ m = folium.Map(location=center, zoom_start=17,
                attr='Esri World Imagery')
 folium.TileLayer('openstreetmap', opacity=0.5).add_to(m)
 
+# 添加现有标记
 if st.session_state.A_gcj:
     lng, lat = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
     folium.Marker([lat, lng], popup='起点 A', icon=folium.Icon(color='green')).add_to(m)
@@ -273,6 +298,7 @@ for poly_gcj in st.session_state.polygons:
         wgs_poly.append([wlat, wlng])
     folium.Polygon(wgs_poly, color='red', fill=True, fill_opacity=0.4, weight=2).add_to(m)
 
+# 添加绘图控件
 draw = Draw(
     draw_options={
         'polygon': {'allowIntersection': False, 'showArea': True},
@@ -286,7 +312,30 @@ draw = Draw(
 )
 draw.add_to(m)
 
-output = st_folium(m, width=1200, height=600, key="map_with_draw", returned_objects=["last_draw"])
+# 显示地图并捕获点击和绘制事件
+output = st_folium(m, width=1200, height=600, key="map_with_draw", returned_objects=["last_click", "last_draw"])
+
+# 处理地图点击（坐标拾取）
+if output and output.get("last_click"):
+    click_data = output["last_click"]
+    if click_data and "lng" in click_data and "lat" in click_data:
+        wgs_lng = click_data["lng"]
+        wgs_lat = click_data["lat"]
+        # 转换为 GCJ-02 存储
+        gcj_lng, gcj_lat = wgs84_to_gcj02(wgs_lng, wgs_lat)
+        st.session_state.clicked_coord = (gcj_lng, gcj_lat)
+        st.rerun()
+
+# 处理绘制事件（地图圈选）
+if output and output.get("last_draw"):
+    draw_data = output["last_draw"]
+    if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
+        coords = draw_data["geometry"]["coordinates"][0]
+        if len(coords) >= 3:
+            st.session_state.pending_draw = coords
+            st.success("已读取多边形，请点击侧边栏「添加障碍物（从地图圈选）」保存")
+        else:
+            st.warning("多边形顶点数不足3")
 
 # ==================== 读取当前绘制按钮 ====================
 if st.button("📐 读取当前绘制 (从地图)", key="get_draw"):
@@ -307,5 +356,6 @@ if st.button("📐 读取当前绘制 (从地图)", key="get_draw"):
 st.caption("✅ 使用说明：\n"
            "1. **地图圈选**：使用左上角多边形工具绘制 → 点击「读取当前绘制」→ 点击侧边栏「添加障碍物（从地图圈选）」\n"
            "2. **手动输入**：在侧边栏文本框输入多边形顶点（GCJ-02坐标，每行 经度,纬度）→ 点击「添加障碍物（手动输入）」\n"
-           "3. 起点/终点通过手动输入经纬度设置。\n"
-           "4. 所有障碍物可保存/加载/清除/下载。")
+           "3. **坐标拾取**：点击地图任意位置，侧边栏会显示GCJ-02坐标，点击「添加为多边形顶点」即可将坐标追加到手动输入框，方便构建多边形。\n"
+           "4. 起点/终点通过手动输入经纬度设置。\n"
+           "5. 所有障碍物可保存/加载/清除/下载。")
