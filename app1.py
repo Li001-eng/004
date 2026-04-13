@@ -97,9 +97,9 @@ def clear_polygons():
     st.success("已清除所有障碍物")
 
 # ==================== 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 稳定版")
+st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 最终修复版")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**卫星地图 + GCJ-02坐标** | **绘制多边形 → 点击「获取当前绘制」→ 点击「添加障碍物」**")
+st.markdown("**卫星地图 + GCJ-02坐标** | **绘制多边形 → 点击「读取当前绘制」→ 点击「添加障碍物」**")
 
 # 初始化状态
 if 'polygons' not in st.session_state:
@@ -148,8 +148,7 @@ with st.sidebar:
         st.info(f"终点B: {st.session_state.B_gcj[0]:.6f}, {st.session_state.B_gcj[1]:.6f}")
     
     st.subheader("🚁 飞行参数")
-    # 修正：直接使用 number_input 绑定 session_state，不需要再手动赋值
-    st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height")
+    st.session_state.flight_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height_input")
     
     st.subheader("💓 心跳包")
     if st.button("📡 获取最新心跳", key="heartbeat"):
@@ -174,7 +173,7 @@ with st.sidebar:
             st.session_state.pending_draw = None
             st.rerun()
         else:
-            st.warning("请先点击「获取当前绘制」从地图捕获多边形")
+            st.warning("请先点击「读取当前绘制」从地图捕获多边形")
     
     st.info(f"当前障碍物数量: {len(st.session_state.polygons)}")
     
@@ -261,15 +260,15 @@ draw.add_to(m)
 
 output = st_folium(m, width=1200, height=600, key="map_with_draw", returned_objects=["last_draw"])
 
-# 获取当前绘制按钮（放在地图下方）
-if st.button("📐 获取当前绘制 (从地图)", key="get_draw_actual"):
+# ==================== 读取当前绘制按钮 ====================
+if st.button("📐 读取当前绘制 (从地图)", key="get_draw"):
     if output and output.get("last_draw"):
         draw_data = output["last_draw"]
         if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
             coords = draw_data["geometry"]["coordinates"][0]
             if len(coords) >= 3:
                 st.session_state.pending_draw = coords
-                st.success("已获取多边形，请点击侧边栏「添加障碍物」保存")
+                st.success("已读取多边形，请点击侧边栏「添加障碍物」保存")
             else:
                 st.warning("多边形顶点数不足3")
         else:
@@ -279,7 +278,6 @@ if st.button("📐 获取当前绘制 (从地图)", key="get_draw_actual"):
 
 st.caption("✅ 操作流程：\n"
            "1. 使用地图左上角的「多边形工具」绘制障碍物区域。\n"
-           "2. 点击下方的「获取当前绘制 (从地图)」按钮。\n"
+           "2. 点击上方的「读取当前绘制 (从地图)」按钮。\n"
            "3. 点击侧边栏的「添加障碍物」按钮保存。\n"
-           "4. 可多次重复以上步骤添加多个障碍物。\n"
-           "5. 起点/终点通过手动输入经纬度设置。")
+           "4. 起点/终点通过手动输入经纬度设置。")
