@@ -97,9 +97,9 @@ def clear_polygons():
     st.success("已清除所有障碍物")
 
 # ==================== 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 手动复制坐标版")
+st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 圈选自动暂存")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**卫星地图 + GCJ-02坐标** | **绘制多边形 → 手动复制坐标 → 粘贴添加**")
+st.markdown("**卫星地图 + GCJ-02坐标** | **绘制多边形 → 自动暂存 → 点击「添加障碍物」保存**")
 
 # 初始化状态
 if 'polygons' not in st.session_state:
@@ -114,12 +114,13 @@ if 'drone_pos_gcj' not in st.session_state:
     st.session_state.drone_pos_gcj = (118.7492, 32.2328)
 if 'heartbeat_history' not in st.session_state:
     st.session_state.heartbeat_history = []
+if 'last_drawn_coords' not in st.session_state:
+    st.session_state.last_drawn_coords = None
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
     st.header("🎮 控制面板")
     
-    # 起点A
     st.subheader("📍 起点A (GCJ-02)")
     col1, col2 = st.columns(2)
     with col1:
@@ -130,7 +131,6 @@ with st.sidebar:
         st.session_state.A_gcj = (a_lng, a_lat)
         st.rerun()
     
-    # 终点B
     st.subheader("🏁 终点B (GCJ-02)")
     col3, col4 = st.columns(2)
     with col3:
@@ -147,12 +147,10 @@ with st.sidebar:
     if st.session_state.B_gcj:
         st.info(f"终点B: {st.session_state.B_gcj[0]:.6f}, {st.session_state.B_gcj[1]:.6f}")
     
-    # 飞行参数
     st.subheader("🚁 飞行参数")
     new_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height_input")
     st.session_state.flight_height = new_height
     
-    # 心跳包
     st.subheader("💓 心跳包")
     if st.button("📡 获取最新心跳", key="heartbeat"):
         update_heartbeat()
@@ -165,26 +163,19 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🛑 障碍物管理")
     
-    # 手动输入多边形顶点
-    st.markdown("**手动添加障碍物（GCJ-02坐标）**")
-    st.markdown("每行一个顶点：经度,纬度（至少3行）")
-    poly_text = st.text_area("多边形顶点", height=150, key="poly_input",
-                             placeholder="118.7485,32.2325\n118.7490,32.2327\n118.7488,32.2330")
+    # 添加障碍物按钮
     if st.button("➕ 添加障碍物", key="add_obstacle"):
-        try:
-            coords = []
-            for line in poly_text.strip().split('\n'):
-                if line.strip():
-                    lng, lat = map(float, line.split(','))
-                    coords.append([lng, lat])
-            if len(coords) >= 3:
-                st.session_state.polygons.append(coords)
-                st.success(f"已添加障碍物，当前总数: {len(st.session_state.polygons)}")
-                st.rerun()
-            else:
-                st.error("至少需要3个顶点")
-        except Exception as e:
-            st.error(f"格式错误: {e}")
+        if st.session_state.last_drawn_coords and len(st.session_state.last_drawn_coords) >= 3:
+            gcj_coords = []
+            for lng, lat in st.session_state.last_drawn_coords:
+                gcj_lng, gcj_lat = wgs84_to_gcj02(lng, lat)
+                gcj_coords.append([gcj_lng, gcj_lat])
+            st.session_state.polygons.append(gcj_coords)
+            st.success(f"已添加障碍物，当前总数: {len(st.session_state.polygons)}")
+            st.session_state.last_drawn_coords = None
+            st.rerun()
+        else:
+            st.warning("请先在地图上绘制一个多边形（至少3个顶点）")
     
     st.info(f"当前障碍物数量: {len(st.session_state.polygons)}")
     
@@ -214,17 +205,11 @@ with st.sidebar:
             st.download_button("📥 下载配置文件", data=f, file_name="obstacle_config.json", mime="application/json", key="download")
     
     st.markdown("---")
-    st.subheader("📌 如何获取多边形坐标")
-    st.markdown("""
-    1. 在地图上使用左上角的「多边形工具」画出区域。
-    2. 绘制完成后，**右键点击多边形** → 选择「检查元素」。
-    3. 在开发者工具的 Console 中输入以下代码获取顶点坐标（近似）：
-       `document.querySelectorAll('.leaflet-polygon path')[0].getAttribute('d')`
-    4. 推荐直接使用侧边栏的文本框手动输入坐标（更简单）。
-    """)
+    st.subheader("🔍 调试信息")
+    st.write("最后绘制的坐标 (WGS84):", st.session_state.last_drawn_coords)
 
 # ==================== 地图显示 ====================
-# 计算中心点
+# 计算地图中心点
 if st.session_state.A_gcj and st.session_state.B_gcj:
     center_gcj = ((st.session_state.A_gcj[0] + st.session_state.B_gcj[0]) / 2,
                   (st.session_state.A_gcj[1] + st.session_state.B_gcj[1]) / 2)
@@ -242,7 +227,7 @@ m = folium.Map(location=center, zoom_start=17,
                attr='Esri World Imagery')
 folium.TileLayer('openstreetmap', opacity=0.5).add_to(m)
 
-# 添加标记和障碍物
+# 添加起点/终点/无人机/航线/已有障碍物
 if st.session_state.A_gcj:
     lng, lat = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
     folium.Marker([lat, lng], popup='起点 A', icon=folium.Icon(color='green')).add_to(m)
@@ -278,11 +263,25 @@ draw = Draw(
 )
 draw.add_to(m)
 
-# 显示地图（不捕获事件）
-st_folium(m, width=1200, height=600, key="map_only")
+# 捕获地图交互（只捕获 last_draw）
+output = st_folium(m, width=1200, height=600, key="map_with_draw", returned_objects=["last_draw"])
 
-st.caption("✅ 使用说明：\n"
-           "1. **设置起点/终点**：在侧边栏手动输入 GCJ-02 经纬度。\n"
-           "2. **添加障碍物**：在地图上使用多边形工具绘制区域，然后手动将顶点坐标（经度,纬度）按行复制到侧边栏的文本框，点击「添加障碍物」。\n"
-           "3. **保存/加载**：使用侧边栏按钮持久化配置。\n"
-           "4. **心跳包**：点击获取最新无人机位置。")
+# ==================== 处理绘制事件 ====================
+if output and output.get("last_draw"):
+    draw_data = output["last_draw"]
+    if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
+        coords = draw_data["geometry"]["coordinates"][0]  # [[lng, lat], ...]
+        if len(coords) >= 3:
+            st.session_state.last_drawn_coords = coords
+            st.sidebar.success("已捕获多边形，点击「添加障碍物」保存")
+        else:
+            st.session_state.last_drawn_coords = None
+    else:
+        st.session_state.last_drawn_coords = None
+
+# 底部说明
+st.caption("✅ 操作指南：\n"
+           "1. 使用地图左上角的「多边形工具」绘制障碍物区域。\n"
+           "2. 绘制完成后，侧边栏会显示「已捕获多边形」，点击「添加障碍物」按钮保存。\n"
+           "3. 保存后红色区域即出现在地图上。\n"
+           "4. 起点/终点通过手动输入经纬度设置。")
