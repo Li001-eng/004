@@ -97,9 +97,9 @@ def clear_polygons():
     st.success("已清除所有障碍物")
 
 # ==================== 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 稳定版")
+st.set_page_config(layout="wide", page_title="无人机障碍物规划 - 最终稳定版")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**卫星地图 + GCJ-02坐标** | **绘制多边形 → 点击「获取当前绘制」→ 点击「添加障碍物」**")
+st.markdown("**卫星地图 + GCJ-02坐标** | **绘制多边形 → 自动暂存 → 点击「添加障碍物」保存**")
 
 # 初始化状态
 if 'polygons' not in st.session_state:
@@ -148,8 +148,8 @@ with st.sidebar:
         st.info(f"终点B: {st.session_state.B_gcj[0]:.6f}, {st.session_state.B_gcj[1]:.6f}")
     
     st.subheader("🚁 飞行参数")
-    # 修正：正确使用 number_input 绑定 session_state
-    new_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height_input")
+    # 修正：通过 number_input 返回值更新 session_state
+    new_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height")
     st.session_state.flight_height = new_height
     
     st.subheader("💓 心跳包")
@@ -164,6 +164,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🛑 障碍物管理")
     
+    # 添加障碍物按钮：直接从 pending_draw 读取
     if st.button("➕ 添加障碍物", key="add_obstacle"):
         if st.session_state.pending_draw and len(st.session_state.pending_draw) >= 3:
             gcj_coords = []
@@ -172,10 +173,10 @@ with st.sidebar:
                 gcj_coords.append([gcj_lng, gcj_lat])
             st.session_state.polygons.append(gcj_coords)
             st.success(f"已添加障碍物，当前总数: {len(st.session_state.polygons)}")
-            st.session_state.pending_draw = None
+            st.session_state.pending_draw = None  # 清空暂存
             st.rerun()
         else:
-            st.warning("请先点击「获取当前绘制」从地图捕获多边形")
+            st.warning("请先在地图上绘制一个多边形（至少3个点），绘制后会自动暂存")
     
     st.info(f"当前障碍物数量: {len(st.session_state.polygons)}")
     
@@ -209,6 +210,7 @@ with st.sidebar:
     st.write(st.session_state.pending_draw)
 
 # ==================== 地图显示 ====================
+# 计算中心点
 if st.session_state.A_gcj and st.session_state.B_gcj:
     center_gcj = ((st.session_state.A_gcj[0] + st.session_state.B_gcj[0]) / 2,
                   (st.session_state.A_gcj[1] + st.session_state.B_gcj[1]) / 2)
@@ -226,6 +228,7 @@ m = folium.Map(location=center, zoom_start=17,
                attr='Esri World Imagery')
 folium.TileLayer('openstreetmap', opacity=0.5).add_to(m)
 
+# 添加标记和障碍物...
 if st.session_state.A_gcj:
     lng, lat = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
     folium.Marker([lat, lng], popup='起点 A', icon=folium.Icon(color='green')).add_to(m)
@@ -247,6 +250,7 @@ for poly_gcj in st.session_state.polygons:
         wgs_poly.append([wlat, wlng])
     folium.Polygon(wgs_poly, color='red', fill=True, fill_opacity=0.4, weight=2).add_to(m)
 
+# 添加绘图控件
 draw = Draw(
     draw_options={
         'polygon': {'allowIntersection': False, 'showArea': True},
@@ -260,27 +264,31 @@ draw = Draw(
 )
 draw.add_to(m)
 
+# 显示地图并获取交互数据
 output = st_folium(m, width=1200, height=600, key="map_with_draw", returned_objects=["last_draw"])
 
-# 获取当前绘制按钮
-if st.button("📐 获取当前绘制 (从地图)", key="get_draw_actual"):
-    if output and output.get("last_draw"):
-        draw_data = output["last_draw"]
-        if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
-            coords = draw_data["geometry"]["coordinates"][0]
-            if len(coords) >= 3:
-                st.session_state.pending_draw = coords
-                st.success("已获取多边形，请点击侧边栏「添加障碍物」保存")
-            else:
-                st.warning("多边形顶点数不足3")
+# ==================== 自动暂存绘制的多边形 ====================
+# 每次页面运行时，检查 output 中是否有新的 last_draw 数据
+if output and output.get("last_draw"):
+    draw_data = output["last_draw"]
+    if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
+        coords = draw_data["geometry"]["coordinates"][0]
+        if len(coords) >= 3:
+            # 将新绘制的多边形暂存（覆盖之前暂存）
+            st.session_state.pending_draw = coords
+            st.sidebar.success("已自动捕获多边形，点击「添加障碍物」保存")
         else:
-            st.warning("未检测到有效的多边形，请先用绘图工具画一个")
+            st.session_state.pending_draw = None
     else:
-        st.warning("未检测到绘制数据，请先在地图上画一个多边形")
+        # 如果不是多边形，不清空 pending_draw（保留之前）
+        pass
+else:
+    # 如果没有新的绘制，不清空 pending_draw
+    pass
 
 st.caption("✅ 操作流程：\n"
            "1. 使用地图左上角的「多边形工具」绘制障碍物区域。\n"
-           "2. 点击下方的「获取当前绘制 (从地图)」按钮。\n"
+           "2. 绘制完成后，页面会自动刷新，侧边栏会显示「已自动捕获多边形」。\n"
            "3. 点击侧边栏的「添加障碍物」按钮保存。\n"
            "4. 可多次重复以上步骤添加多个障碍物。\n"
            "5. 起点/终点通过手动输入经纬度设置。")
