@@ -1,36 +1,58 @@
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
+import numpy as np
 import json
 import os
 from datetime import datetime
 from folium.plugins import Draw
 
-# ==================== 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划系统 - 高德底图版")
-st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**高德地图 | GCJ-02坐标系 | 障碍物持久化 | 绘制多边形自动保存**")
+# ==================== GCJ-02 与 WGS84 转换 ====================
+a = 6378245.0
+ee = 0.00669342162296594323
 
-# 初始化会话状态
-if 'polygons' not in st.session_state:
-    st.session_state.polygons = []
-if 'A_gcj' not in st.session_state:
-    st.session_state.A_gcj = None
-if 'B_gcj' not in st.session_state:
-    st.session_state.B_gcj = None
-if 'flight_height' not in st.session_state:
-    st.session_state.flight_height = 50
-if 'drone_pos_gcj' not in st.session_state:
-    st.session_state.drone_pos_gcj = (118.7492, 32.2328)
-if 'heartbeat_history' not in st.session_state:
-    st.session_state.heartbeat_history = []
-if 'manual_polygon_text' not in st.session_state:
-    st.session_state.manual_polygon_text = ""
-if 'last_processed_draw' not in st.session_state:
-    st.session_state.last_processed_draw = None
+def _transform_lat(x, y):
+    ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * np.sqrt(abs(x))
+    ret += (20.0 * np.sin(6.0 * x * np.pi) + 20.0 * np.sin(2.0 * x * np.pi)) * 2.0 / 3.0
+    ret += (20.0 * np.sin(y * np.pi) + 40.0 * np.sin(y / 3.0 * np.pi)) * 2.0 / 3.0
+    ret += (160.0 * np.sin(y / 12.0 * np.pi) + 320 * np.sin(y * np.pi / 30.0)) * 2.0 / 3.0
+    return ret
 
-# 模拟心跳包
+def _transform_lng(x, y):
+    ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * np.sqrt(abs(x))
+    ret += (20.0 * np.sin(6.0 * x * np.pi) + 20.0 * np.sin(2.0 * x * np.pi)) * 2.0 / 3.0
+    ret += (20.0 * np.sin(x * np.pi) + 40.0 * np.sin(x / 3.0 * np.pi)) * 2.0 / 3.0
+    ret += (150.0 * np.sin(x / 12.0 * np.pi) + 300.0 * np.sin(x / 30.0 * np.pi)) * 2.0 / 3.0
+    return ret
+
+def wgs84_to_gcj02(lng, lat):
+    dlat = _transform_lat(lng - 105.0, lat - 35.0)
+    dlng = _transform_lng(lng - 105.0, lat - 35.0)
+    radlat = lat / 180.0 * np.pi
+    magic = np.sin(radlat)
+    magic = 1 - ee * magic * magic
+    sqrtmagic = np.sqrt(magic)
+    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * np.pi)
+    dlng = (dlng * 180.0) / (a / sqrtmagic * np.cos(radlat) * np.pi)
+    return lng + dlng, lat + dlat
+
+def gcj02_to_wgs84(lng, lat):
+    dlat = _transform_lat(lng - 105.0, lat - 35.0)
+    dlng = _transform_lng(lng - 105.0, lat - 35.0)
+    radlat = lat / 180.0 * np.pi
+    magic = np.sin(radlat)
+    magic = 1 - ee * magic * magic
+    sqrtmagic = np.sqrt(magic)
+    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * np.pi)
+    dlng = (dlng * 180.0) / (a / sqrtmagic * np.cos(radlat) * np.pi)
+    return lng - dlng, lat - dlat
+
+# ==================== 模拟心跳包 ====================
 def update_heartbeat():
+    if 'drone_pos_gcj' not in st.session_state:
+        st.session_state.drone_pos_gcj = (118.7492, 32.2328)
+    if 'heartbeat_history' not in st.session_state:
+        st.session_state.heartbeat_history = []
     if st.session_state.get('B_gcj'):
         target_lng, target_lat = st.session_state.B_gcj
         cur_lng, cur_lat = st.session_state.drone_pos_gcj
@@ -48,57 +70,225 @@ def update_heartbeat():
     st.session_state.heartbeat_history = st.session_state.heartbeat_history[:5]
     return heartbeat
 
-# 障碍物持久化函数 (save_polygons, load_polygons, clear_polygons) 保持不变，此处省略以节省篇幅...
+# ==================== 障碍物持久化 ====================
+CONFIG_FILE = "obstacle_config.json"
+
+def save_polygons():
+    data = {
+        "version": "v12.2",
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "polygons": st.session_state.polygons
+    }
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    st.success(f"已保存 {len(st.session_state.polygons)} 个障碍物")
+
+def load_polygons():
+    if not os.path.exists(CONFIG_FILE):
+        st.error("配置文件不存在，请先保存")
+        return
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    st.session_state.polygons = data.get("polygons", [])
+    st.success(f"已加载 {len(st.session_state.polygons)} 个障碍物")
+
+def clear_polygons():
+    st.session_state.polygons = []
+    st.success("已清除所有障碍物")
+
+# ==================== 主界面 ====================
+st.set_page_config(layout="wide", page_title="无人机障碍物规划系统")
+st.title("✈️ 校园无人机飞行规划与实时监控")
+st.markdown("**卫星地图 | GCJ-02坐标自动转换 | 障碍物持久化 | 绘制多边形自动保存**")
+
+# 初始化状态
+if 'polygons' not in st.session_state:
+    st.session_state.polygons = []
+if 'A_gcj' not in st.session_state:
+    st.session_state.A_gcj = None
+if 'B_gcj' not in st.session_state:
+    st.session_state.B_gcj = None
+if 'flight_height' not in st.session_state:
+    st.session_state.flight_height = 50
+if 'drone_pos_gcj' not in st.session_state:
+    st.session_state.drone_pos_gcj = (118.7492, 32.2328)
+if 'heartbeat_history' not in st.session_state:
+    st.session_state.heartbeat_history = []
+if 'manual_polygon_text' not in st.session_state:
+    st.session_state.manual_polygon_text = ""
+if 'last_processed_draw' not in st.session_state:
+    st.session_state.last_processed_draw = None  # 记录已处理的多边形标识
 
 # ==================== 侧边栏布局 ====================
 with st.sidebar:
-    # ... 此处为侧边栏UI代码，与原版一致，功能保持不变 ...
-    # (包括：获取最新心跳按钮、最新心跳包仪表盘、起点A/终点B输入、飞行参数、心跳包历史、障碍物配置持久化、手动输入障碍物等)
-    pass
+    st.header("控制面板")
+    
+    # 获取最新心跳按钮
+    if st.button("📡 获取最新心跳", key="heartbeat", use_container_width=True):
+        update_heartbeat()
+        st.rerun()
+    
+    # 最新心跳包仪表盘
+    st.subheader("最新心跳包")
+    if st.session_state.heartbeat_history:
+        cur = st.session_state.heartbeat_history[0]
+        col1, col2 = st.columns(2)
+        col1.metric("经度 (GCJ-02)", f"{cur['lng']:.6f}")
+        col2.metric("纬度 (GCJ-02)", f"{cur['lat']:.6f}")
+        col3, col4 = st.columns(2)
+        col3.metric("飞行高度 (m)", f"{cur['alt']}")
+        col4.metric("时间戳", cur['timestamp'])
+    else:
+        st.info("暂无心跳数据，请点击「获取最新心跳」")
+    
+    # 起点A
+    st.subheader("起点A (GCJ-02)")
+    col1, col2 = st.columns(2)
+    with col1:
+        a_lat = st.number_input("纬度", value=32.2323, format="%.6f", key="a_lat")
+    with col2:
+        a_lng = st.number_input("经度", value=118.7490, format="%.6f", key="a_lng")
+    if st.button("设置A点", key="set_A", use_container_width=True):
+        st.session_state.A_gcj = (a_lng, a_lat)
+        st.rerun()
+    
+    # 终点B
+    st.subheader("终点B (GCJ-02)")
+    col1, col2 = st.columns(2)
+    with col1:
+        b_lat = st.number_input("纬度", value=32.2344, format="%.6f", key="b_lat")
+    with col2:
+        b_lng = st.number_input("经度", value=118.7490, format="%.6f", key="b_lng")
+    if st.button("设置B点", key="set_B", use_container_width=True):
+        st.session_state.B_gcj = (b_lng, b_lat)
+        st.rerun()
+    
+    # 飞行参数
+    st.subheader("飞行参数")
+    st.session_state.flight_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height_input")
+    
+    # 心跳包历史
+    st.subheader("心跳包历史（最近5次）")
+    if st.session_state.heartbeat_history:
+        for hb in st.session_state.heartbeat_history:
+            st.caption(f"{hb['timestamp']}  Lng:{hb['lng']:.5f}  Lat:{hb['lat']:.5f}  Alt:{hb['alt']}m")
+    else:
+        st.caption("暂无历史")
+    
+    st.markdown("---")
+    
+    # 障碍物配置持久化
+    st.subheader("障碍物配置持久化")
+    st.caption(f"配置文件: `{os.path.abspath(CONFIG_FILE)}` | 版本: v12.2")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("💾 保存到文件", key="save", use_container_width=True):
+            save_polygons()
+    with col2:
+        if st.button("📂 从文件加载", key="load", use_container_width=True):
+            load_polygons()
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🗑️ 清除全部", key="clear", use_container_width=True):
+            clear_polygons()
+            st.rerun()
+    with col2:
+        if st.button("🚀 一键部署", key="deploy", use_container_width=True):
+            st.session_state.polygons = [
+                [[118.7485, 32.2325], [118.7490, 32.2327], [118.7488, 32.2330]],
+                [[118.7495, 32.2335], [118.7500, 32.2332], [118.7498, 32.2338]]
+            ]
+            st.success("已部署预设障碍物")
+            st.rerun()
+    
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "rb") as f:
+            st.download_button("📥 下载配置文件", data=f, file_name="obstacle_config.json", mime="application/json", key="download", use_container_width=True)
+    
+    st.markdown("---")
+    
+    # 手动输入障碍物（备选）
+    st.subheader("🛑 手动输入障碍物")
+    manual_input = st.text_area("多边形顶点（每行 经度,纬度）", height=120, key="manual_input",
+                                value=st.session_state.manual_polygon_text,
+                                placeholder="118.7485,32.2325\n118.7490,32.2327\n118.7488,32.2330")
+    st.session_state.manual_polygon_text = manual_input
+    if st.button("➕ 添加障碍物（手动）", key="add_manual", use_container_width=True):
+        try:
+            lines = manual_input.strip().split('\n')
+            coords = []
+            for line in lines:
+                if line.strip():
+                    lng, lat = map(float, line.split(','))
+                    coords.append([lng, lat])
+            if len(coords) >= 3:
+                st.session_state.polygons.append(coords)
+                st.success(f"已添加手动障碍物，当前总数: {len(st.session_state.polygons)}")
+                st.session_state.manual_polygon_text = ""
+                st.rerun()
+            else:
+                st.error("至少需要3个顶点")
+        except Exception as e:
+            st.error(f"格式错误: {e}")
+    
+    st.info(f"当前障碍物总数: {len(st.session_state.polygons)}")
 
 # ==================== 地图显示 ====================
-# 计算地图中心点 (GCJ-02 坐标)
+# 计算地图中心点 (WGS84)
 if st.session_state.A_gcj and st.session_state.B_gcj:
-    center = ((st.session_state.A_gcj[0] + st.session_state.B_gcj[0]) / 2,
-              (st.session_state.A_gcj[1] + st.session_state.B_gcj[1]) / 2)
+    center_gcj = ((st.session_state.A_gcj[0] + st.session_state.B_gcj[0]) / 2,
+                  (st.session_state.A_gcj[1] + st.session_state.B_gcj[1]) / 2)
 elif st.session_state.A_gcj:
-    center = st.session_state.A_gcj
+    center_gcj = st.session_state.A_gcj
 elif st.session_state.B_gcj:
-    center = st.session_state.B_gcj
+    center_gcj = st.session_state.B_gcj
 else:
-    center = (118.7492, 32.2332)
+    center_gcj = (118.7492, 32.2332)
+center_wgs_lng, center_wgs_lat = gcj02_to_wgs84(center_gcj[0], center_gcj[1])
+center = [center_wgs_lat, center_wgs_lng]
 
-# 创建地图，使用高德卫星底图
-m = folium.Map(location=[center[1], center[0]], zoom_start=17,
-               tiles='https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
-               attr='高德地图')
+# 创建底图
+m = folium.Map(location=center, zoom_start=17,
+               tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+               attr='Esri World Imagery')
+folium.TileLayer('openstreetmap', opacity=0.5).add_to(m)
 
-# 可选：叠加高德路网标注
-folium.TileLayer(
-    tiles='https://wprd01.is.autonavi.com/appmaptile?x={x}&y={y}&z={z}&lang=zh_cn&size=1&scl=2&style=8<ype=11',
-    name='高德路网',
-    attr='高德地图',
-    opacity=0.7
-).add_to(m)
-
-# 添加标记和图形 (坐标均为 GCJ-02，无需转换)
+# 添加起点A
 if st.session_state.A_gcj:
-    folium.Marker([st.session_state.A_gcj[1], st.session_state.A_gcj[0]], popup='起点 A', icon=folium.Icon(color='green')).add_to(m)
+    lng, lat = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
+    folium.Marker([lat, lng], popup='起点 A', icon=folium.Icon(color='green')).add_to(m)
+# 添加终点B
 if st.session_state.B_gcj:
-    folium.Marker([st.session_state.B_gcj[1], st.session_state.B_gcj[0]], popup='终点 B', icon=folium.Icon(color='red')).add_to(m)
+    lng, lat = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
+    folium.Marker([lat, lng], popup='终点 B', icon=folium.Icon(color='red')).add_to(m)
+# 添加无人机
 if st.session_state.heartbeat_history:
     cur = st.session_state.heartbeat_history[0]
-    folium.Marker([cur['lat'], cur['lng']], popup='无人机', icon=folium.Icon(color='blue', icon='plane', prefix='fa')).add_to(m)
+    lng, lat = gcj02_to_wgs84(cur['lng'], cur['lat'])
+    folium.Marker([lat, lng], popup='无人机', icon=folium.Icon(color='blue', icon='plane', prefix='fa')).add_to(m)
+# 添加航线
 if st.session_state.A_gcj and st.session_state.B_gcj:
-    folium.PolyLine([[st.session_state.A_gcj[1], st.session_state.A_gcj[0]], [st.session_state.B_gcj[1], st.session_state.B_gcj[0]]], color='blue', weight=3).add_to(m)
+    a_lng, a_lat = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
+    b_lng, b_lat = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
+    folium.PolyLine([[a_lat, a_lng], [b_lat, b_lng]], color='blue', weight=3).add_to(m)
+# 添加所有已保存的障碍物
 for poly_gcj in st.session_state.polygons:
-    # 注意：poly_gcj 中的坐标格式为 [lng, lat]
-    wgs_poly = [[lat, lng] for lng, lat in poly_gcj]
+    wgs_poly = []
+    for lng, lat in poly_gcj:
+        wlng, wlat = gcj02_to_wgs84(lng, lat)
+        wgs_poly.append([wlat, wlng])
     folium.Polygon(wgs_poly, color='red', fill=True, fill_opacity=0.4, weight=2).add_to(m)
 
-# 添加绘图控件
+# 添加绘图控件 (Draw)
 draw = Draw(
-    draw_options={'polygon': {'allowIntersection': False, 'showArea': True}, 'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False},
+    draw_options={
+        'polygon': {'allowIntersection': False, 'showArea': True},
+        'polyline': False,
+        'rectangle': False,
+        'circle': False,
+        'marker': False,
+        'circlemarker': False
+    },
     edit_options={'edit': True, 'remove': True}
 )
 draw.add_to(m)
@@ -106,15 +296,22 @@ draw.add_to(m)
 # 显示地图并捕获绘制事件
 output = st_folium(m, width=1200, height=600, key="main_map", returned_objects=["last_draw"])
 
-# 自动保存绘制的多边形
+# ==================== 自动保存绘制的多边形 ====================
 if output and output.get("last_draw"):
     draw_data = output["last_draw"]
     if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
-        coords = draw_data["geometry"]["coordinates"][0]  # 格式为 [[lng, lat], ...]
+        coords = draw_data["geometry"]["coordinates"][0]  # [[lng, lat], ...]
         if len(coords) >= 3:
+            # 生成唯一标识（坐标字符串）
             coords_str = str(coords)
+            # 检查是否已处理过这个多边形（避免重复添加）
             if st.session_state.last_processed_draw != coords_str:
-                st.session_state.polygons.append(coords)
+                # 转换为 GCJ-02 存储
+                gcj_coords = []
+                for lng, lat in coords:
+                    gcj_lng, gcj_lat = wgs84_to_gcj02(lng, lat)
+                    gcj_coords.append([gcj_lng, gcj_lat])
+                st.session_state.polygons.append(gcj_coords)
                 st.session_state.last_processed_draw = coords_str
                 st.success(f"✅ 已自动添加障碍物，当前总数: {len(st.session_state.polygons)}")
                 st.rerun()
