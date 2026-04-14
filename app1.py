@@ -99,7 +99,7 @@ def clear_polygons():
 # ==================== 主界面 ====================
 st.set_page_config(layout="wide", page_title="无人机障碍物规划系统")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**卫星地图 | GCJ-02坐标自动转换 | 障碍物持久化 | 绘制多边形自动保存**")
+st.markdown("**卫星地图 | GCJ-02坐标自动转换 | 障碍物持久化 | 心跳包手动刷新（无地图闪烁）**")
 
 # 初始化状态
 if 'polygons' not in st.session_state:
@@ -116,19 +116,19 @@ if 'heartbeat_history' not in st.session_state:
     st.session_state.heartbeat_history = []
 if 'manual_polygon_text' not in st.session_state:
     st.session_state.manual_polygon_text = ""
-if 'last_processed_draw' not in st.session_state:
-    st.session_state.last_processed_draw = None  # 记录已处理的多边形标识
+if 'last_drawn_coords' not in st.session_state:
+    st.session_state.last_drawn_coords = None
 
 # ==================== 侧边栏布局 ====================
 with st.sidebar:
     st.header("控制面板")
     
-    # 获取最新心跳按钮
+    # ----- 获取最新心跳按钮 -----
     if st.button("📡 获取最新心跳", key="heartbeat", use_container_width=True):
         update_heartbeat()
         st.rerun()
     
-    # 最新心跳包仪表盘
+    # ----- 最新心跳包卡片（仪表盘）-----
     st.subheader("最新心跳包")
     if st.session_state.heartbeat_history:
         cur = st.session_state.heartbeat_history[0]
@@ -141,7 +141,7 @@ with st.sidebar:
     else:
         st.info("暂无心跳数据，请点击「获取最新心跳」")
     
-    # 起点A
+    # ----- 起点A -----
     st.subheader("起点A (GCJ-02)")
     col1, col2 = st.columns(2)
     with col1:
@@ -152,7 +152,7 @@ with st.sidebar:
         st.session_state.A_gcj = (a_lng, a_lat)
         st.rerun()
     
-    # 终点B
+    # ----- 终点B -----
     st.subheader("终点B (GCJ-02)")
     col1, col2 = st.columns(2)
     with col1:
@@ -163,11 +163,11 @@ with st.sidebar:
         st.session_state.B_gcj = (b_lng, b_lat)
         st.rerun()
     
-    # 飞行参数
+    # ----- 飞行参数 -----
     st.subheader("飞行参数")
     st.session_state.flight_height = st.number_input("设定飞行高度 (m)", value=st.session_state.flight_height, step=5, key="flight_height_input")
     
-    # 心跳包历史
+    # ----- 心跳包历史 -----
     st.subheader("心跳包历史（最近5次）")
     if st.session_state.heartbeat_history:
         for hb in st.session_state.heartbeat_history:
@@ -177,7 +177,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # 障碍物配置持久化
+    # ----- 障碍物配置持久化 -----
     st.subheader("障碍物配置持久化")
     st.caption(f"配置文件: `{os.path.abspath(CONFIG_FILE)}` | 版本: v12.2")
     col1, col2 = st.columns(2)
@@ -201,19 +201,38 @@ with st.sidebar:
             st.success("已部署预设障碍物")
             st.rerun()
     
+    # 下载配置文件
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "rb") as f:
             st.download_button("📥 下载配置文件", data=f, file_name="obstacle_config.json", mime="application/json", key="download", use_container_width=True)
     
     st.markdown("---")
     
-    # 手动输入障碍物（备选）
-    st.subheader("🛑 手动输入障碍物")
+    # ----- 添加障碍物（地图圈选 + 手动输入）-----
+    st.subheader("🛑 添加障碍物")
+    
+    # 地图圈选
+    st.markdown("**从地图圈选**")
+    if st.button("➕ 添加障碍物（从当前圈选）", key="add_from_map", use_container_width=True):
+        if st.session_state.last_drawn_coords and len(st.session_state.last_drawn_coords) >= 3:
+            gcj_coords = []
+            for lng, lat in st.session_state.last_drawn_coords:
+                gcj_lng, gcj_lat = wgs84_to_gcj02(lng, lat)
+                gcj_coords.append([gcj_lng, gcj_lat])
+            st.session_state.polygons.append(gcj_coords)
+            st.success(f"已添加障碍物，当前总数: {len(st.session_state.polygons)}")
+            st.session_state.last_drawn_coords = None
+            st.rerun()
+        else:
+            st.warning("请先在地图上绘制一个多边形（使用左上角多边形工具）")
+    
+    # 手动输入
+    st.markdown("**手动输入顶点 (GCJ-02)**")
     manual_input = st.text_area("多边形顶点（每行 经度,纬度）", height=120, key="manual_input",
                                 value=st.session_state.manual_polygon_text,
                                 placeholder="118.7485,32.2325\n118.7490,32.2327\n118.7488,32.2330")
     st.session_state.manual_polygon_text = manual_input
-    if st.button("➕ 添加障碍物（手动）", key="add_manual", use_container_width=True):
+    if st.button("➕ 添加障碍物（手动输入）", key="add_manual", use_container_width=True):
         try:
             lines = manual_input.strip().split('\n')
             coords = []
@@ -293,32 +312,21 @@ draw = Draw(
 )
 draw.add_to(m)
 
-# 显示地图并捕获绘制事件
+# 显示地图并捕获交互（仅捕获绘制，不再捕获点击）
 output = st_folium(m, width=1200, height=600, key="main_map", returned_objects=["last_draw"])
 
-# ==================== 自动保存绘制的多边形 ====================
+# 处理地图绘制（多边形圈选）—— 自动保存最新绘制的坐标
 if output and output.get("last_draw"):
     draw_data = output["last_draw"]
     if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
-        coords = draw_data["geometry"]["coordinates"][0]  # [[lng, lat], ...]
+        coords = draw_data["geometry"]["coordinates"][0]
         if len(coords) >= 3:
-            # 生成唯一标识（坐标字符串）
-            coords_str = str(coords)
-            # 检查是否已处理过这个多边形（避免重复添加）
-            if st.session_state.last_processed_draw != coords_str:
-                # 转换为 GCJ-02 存储
-                gcj_coords = []
-                for lng, lat in coords:
-                    gcj_lng, gcj_lat = wgs84_to_gcj02(lng, lat)
-                    gcj_coords.append([gcj_lng, gcj_lat])
-                st.session_state.polygons.append(gcj_coords)
-                st.session_state.last_processed_draw = coords_str
-                st.success(f"✅ 已自动添加障碍物，当前总数: {len(st.session_state.polygons)}")
-                st.rerun()
+            st.session_state.last_drawn_coords = coords
+            st.sidebar.success("已捕获多边形，点击「添加障碍物（从当前圈选）」保存")
 
 # 底部说明
-st.caption("✅ 使用说明：\n"
-           "1. **自动圈选**：使用地图左上角的「多边形工具」绘制障碍物区域，绘制完成后自动保存并显示红色区域。\n"
-           "2. **手动输入**：也可在侧边栏手动输入顶点坐标添加障碍物。\n"
+st.caption("✅ 操作指南：\n"
+           "1. **地图圈选**：使用左上角多边形工具绘制 → 侧边栏点击「添加障碍物（从当前圈选）」保存。\n"
+           "2. **手动输入**：在侧边栏文本框输入顶点（GCJ-02坐标，每行 经度,纬度）→ 点击「添加障碍物（手动输入）」保存。\n"
            "3. 起点/终点通过手动输入经纬度设置。\n"
            "4. 所有障碍物可保存/加载/清除/下载。")
