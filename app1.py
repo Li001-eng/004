@@ -1,6 +1,6 @@
 import streamlit as st
 import folium
-from streamlit_folium import st_folium
+from streamlit_folium import folium_static, st_folium
 import numpy as np
 import json
 import os
@@ -74,7 +74,6 @@ def update_heartbeat():
 CONFIG_FILE = "obstacle_config.json"
 
 def save_polygons():
-    """保存障碍物到文件（直接存储 GCJ-02 坐标列表）"""
     data = {
         "version": "v12.2",
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -85,7 +84,6 @@ def save_polygons():
     st.success(f"已保存 {len(st.session_state.polygons)} 个障碍物")
 
 def load_polygons():
-    """从文件加载障碍物"""
     if not os.path.exists(CONFIG_FILE):
         st.error("配置文件不存在，请先保存")
         return
@@ -96,14 +94,19 @@ def load_polygons():
 
 def clear_polygons():
     st.session_state.polygons = []
-    save_polygons()  # 清空后也保存到文件
-    st.success("已清除所有障碍物并保存")
+    st.success("已清除所有障碍物")
+
+def delete_obstacle(index):
+    """删除指定索引的障碍物"""
+    if 0 <= index < len(st.session_state.polygons):
+        st.session_state.polygons.pop(index)
+        st.success(f"已删除障碍物 {index+1}")
+        st.rerun()
 
 # ==================== 主界面 ====================
-st.set_page_config(layout="wide", page_title="无人机障碍物规划系统 - 自动保存")
+st.set_page_config(layout="wide", page_title="无人机障碍物规划系统")
 st.title("✈️ 校园无人机飞行规划与实时监控")
-st.markdown("**卫星地图 | GCJ-02坐标自动转换 | 障碍物持久化 | 心跳包手动刷新**")
-st.markdown("🎯 **地图圈选障碍物后自动保存** | 也可手动输入坐标")
+st.markdown("**卫星地图 | GCJ-02坐标自动转换 | 障碍物持久化 | 心跳包手动刷新（无地图闪烁）**")
 
 # 初始化状态
 if 'polygons' not in st.session_state:
@@ -120,6 +123,8 @@ if 'heartbeat_history' not in st.session_state:
     st.session_state.heartbeat_history = []
 if 'manual_polygon_text' not in st.session_state:
     st.session_state.manual_polygon_text = ""
+if 'last_drawn_coords' not in st.session_state:
+    st.session_state.last_drawn_coords = None
 
 # ==================== 侧边栏布局 ====================
 with st.sidebar:
@@ -179,9 +184,22 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # ----- 障碍物配置持久化 -----
-    st.subheader("障碍物配置持久化")
+    # ========= 障碍物管理（改进版，类似用户代码风格） =========
+    st.subheader("🚧 障碍物管理")
     st.caption(f"配置文件: `{os.path.abspath(CONFIG_FILE)}` | 版本: v12.2")
+    
+    # 显示障碍物列表（每个带删除按钮）
+    if st.session_state.polygons:
+        st.write(f"**当前共 {len(st.session_state.polygons)} 个障碍物**")
+        for idx, poly in enumerate(st.session_state.polygons):
+            col1, col2 = st.columns([3, 1])
+            col1.write(f"🚧 障碍物 {idx+1} （{len(poly)} 个顶点）")
+            if col2.button("🗑️ 删除", key=f"del_{idx}", use_container_width=True):
+                delete_obstacle(idx)
+    else:
+        st.info("暂无障碍物，请使用下方方式添加")
+    
+    # 操作按钮行
     col1, col2 = st.columns(2)
     with col1:
         if st.button("💾 保存到文件", key="save", use_container_width=True):
@@ -200,24 +218,40 @@ with st.sidebar:
                 [[118.7485, 32.2325], [118.7490, 32.2327], [118.7488, 32.2330]],
                 [[118.7495, 32.2335], [118.7500, 32.2332], [118.7498, 32.2338]]
             ]
-            save_polygons()
-            st.success("已部署预设障碍物并保存")
+            st.success("已部署预设障碍物")
             st.rerun()
     
-    # 下载配置文件
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "rb") as f:
             st.download_button("📥 下载配置文件", data=f, file_name="obstacle_config.json", mime="application/json", key="download", use_container_width=True)
     
     st.markdown("---")
     
-    # ----- 手动输入障碍物（备用）-----
-    st.subheader("✏️ 手动添加障碍物 (GCJ-02)")
+    # ----- 添加障碍物（地图圈选 + 手动输入）-----
+    st.subheader("🛑 添加障碍物")
+    
+    # 地图圈选
+    st.markdown("**从地图圈选**")
+    if st.button("➕ 添加障碍物（从当前圈选）", key="add_from_map", use_container_width=True):
+        if st.session_state.last_drawn_coords and len(st.session_state.last_drawn_coords) >= 3:
+            gcj_coords = []
+            for lng, lat in st.session_state.last_drawn_coords:
+                gcj_lng, gcj_lat = wgs84_to_gcj02(lng, lat)
+                gcj_coords.append([gcj_lng, gcj_lat])
+            st.session_state.polygons.append(gcj_coords)
+            st.success(f"已添加障碍物，当前总数: {len(st.session_state.polygons)}")
+            st.session_state.last_drawn_coords = None
+            st.rerun()
+        else:
+            st.warning("请先在地图上绘制一个多边形（使用左上角多边形工具）")
+    
+    # 手动输入
+    st.markdown("**手动输入顶点 (GCJ-02)**")
     manual_input = st.text_area("多边形顶点（每行 经度,纬度）", height=120, key="manual_input",
                                 value=st.session_state.manual_polygon_text,
                                 placeholder="118.7485,32.2325\n118.7490,32.2327\n118.7488,32.2330")
     st.session_state.manual_polygon_text = manual_input
-    if st.button("➕ 手动添加并保存", key="add_manual", use_container_width=True):
+    if st.button("➕ 添加障碍物（手动输入）", key="add_manual", use_container_width=True):
         try:
             lines = manual_input.strip().split('\n')
             coords = []
@@ -227,7 +261,6 @@ with st.sidebar:
                     coords.append([lng, lat])
             if len(coords) >= 3:
                 st.session_state.polygons.append(coords)
-                save_polygons()  # 立即保存
                 st.success(f"已添加手动障碍物，当前总数: {len(st.session_state.polygons)}")
                 st.session_state.manual_polygon_text = ""
                 st.rerun()
@@ -236,9 +269,29 @@ with st.sidebar:
         except Exception as e:
             st.error(f"格式错误: {e}")
     
-    st.info(f"当前障碍物总数: {len(st.session_state.polygons)}")
+    # 可选：障碍物地图预览（类似用户代码中的迷你地图）
+    st.markdown("---")
+    st.subheader("🗺️ 障碍物地图预览")
+    preview_map = folium.Map(location=[32.2332, 118.7492], zoom_start=16,
+                             tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                             attr='Esri World Imagery')
+    # 添加现有障碍物
+    for poly_gcj in st.session_state.polygons:
+        wgs_poly = []
+        for lng, lat in poly_gcj:
+            wlng, wlat = gcj02_to_wgs84(lng, lat)
+            wgs_poly.append([wlat, wlng])
+        folium.Polygon(wgs_poly, color='red', fill=True, fill_opacity=0.4).add_to(preview_map)
+    # 添加A/B点（如果已设置）
+    if st.session_state.A_gcj:
+        lng, lat = gcj02_to_wgs84(st.session_state.A_gcj[0], st.session_state.A_gcj[1])
+        folium.Marker([lat, lng], popup='起点 A', icon=folium.Icon(color='green')).add_to(preview_map)
+    if st.session_state.B_gcj:
+        lng, lat = gcj02_to_wgs84(st.session_state.B_gcj[0], st.session_state.B_gcj[1])
+        folium.Marker([lat, lng], popup='终点 B', icon=folium.Icon(color='red')).add_to(preview_map)
+    folium_static(preview_map, width=300, height=300)
 
-# ==================== 地图显示 ====================
+# ==================== 地图显示（主地图，用于圈选） ====================
 # 计算地图中心点 (WGS84)
 if st.session_state.A_gcj and st.session_state.B_gcj:
     center_gcj = ((st.session_state.A_gcj[0] + st.session_state.B_gcj[0]) / 2,
@@ -252,7 +305,7 @@ else:
 center_wgs_lng, center_wgs_lat = gcj02_to_wgs84(center_gcj[0], center_gcj[1])
 center = [center_wgs_lat, center_wgs_lng]
 
-# 创建底图（Esri 卫星图 + 半透明 OSM 标注）
+# 创建底图
 m = folium.Map(location=center, zoom_start=17,
                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
                attr='Esri World Imagery')
@@ -298,35 +351,22 @@ draw = Draw(
 )
 draw.add_to(m)
 
-# 显示地图并捕获绘制事件
+# 显示地图并捕获交互（仅捕获绘制）
 output = st_folium(m, width=1200, height=600, key="main_map", returned_objects=["last_draw"])
 
-# ==================== 自动保存障碍物（核心功能）====================
-# 当用户完成多边形绘制时，自动保存到文件并更新地图
+# 处理地图绘制（多边形圈选）—— 自动保存最新绘制的坐标
 if output and output.get("last_draw"):
     draw_data = output["last_draw"]
     if draw_data and draw_data.get("geometry", {}).get("type") == "Polygon":
-        coords_wgs = draw_data["geometry"]["coordinates"][0]  # 外环坐标，WGS84
-        if len(coords_wgs) >= 3:
-            # 转换为 GCJ-02 存储
-            coords_gcj = []
-            for lng, lat in coords_wgs:
-                gcj_lng, gcj_lat = wgs84_to_gcj02(lng, lat)
-                coords_gcj.append([gcj_lng, gcj_lat])
-            # 添加到 session_state
-            st.session_state.polygons.append(coords_gcj)
-            # 立即保存到文件
-            save_polygons()
-            # 显示提示信息
-            st.sidebar.success(f"✅ 已自动添加并保存障碍物，当前总数: {len(st.session_state.polygons)}")
-            # 刷新页面以显示新障碍物
-            st.rerun()
-        else:
-            st.sidebar.warning("多边形顶点数不足3，未保存")
+        coords = draw_data["geometry"]["coordinates"][0]
+        if len(coords) >= 3:
+            st.session_state.last_drawn_coords = coords
+            st.sidebar.success("已捕获多边形，点击「添加障碍物（从当前圈选）」保存")
 
 # 底部说明
 st.caption("✅ 操作指南：\n"
-           "1. **地图圈选**：使用左上角多边形工具绘制 → **自动保存**，无需额外操作。\n"
-           "2. **手动输入**：在侧边栏文本框输入顶点（GCJ-02坐标，每行 经度,纬度）→ 点击「手动添加并保存」。\n"
-           "3. 起点/终点通过手动输入经纬度设置。\n"
-           "4. 所有障碍物自动保存到本地 JSON 文件，下次打开可「从文件加载」。")
+           "1. **地图圈选**：使用左上角多边形工具绘制 → 侧边栏点击「添加障碍物（从当前圈选）」保存。\n"
+           "2. **手动输入**：在侧边栏文本框输入顶点（GCJ-02坐标，每行 经度,纬度）→ 点击「添加障碍物（手动输入）」保存。\n"
+           "3. **管理障碍物**：侧边栏「障碍物管理」区域可查看、删除单个障碍物，以及保存/加载/清除全部。\n"
+           "4. 起点/终点通过手动输入经纬度设置。\n"
+           "5. 所有障碍物可持久化保存到 JSON 文件。")
