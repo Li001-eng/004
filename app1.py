@@ -11,7 +11,7 @@ from datetime import datetime
 import pandas as pd
 
 # ==================== 页面配置 ====================
-st.set_page_config(page_title="无人机地面站系统 - 智能避障（带高度）", layout="wide")
+st.set_page_config(page_title="无人机地面站系统 - 智能避障", layout="wide")
 
 # ==================== 坐标 ====================
 SCHOOL_CENTER_GCJ = [118.7490, 32.2340]
@@ -110,9 +110,7 @@ def distance(p1, p2):
 
 # ==================== 障碍物高度与阻挡判断 ====================
 def is_obstacle_blocking(obs, flight_height, safe_radius):
-    """判断障碍物是否阻挡（考虑高度）"""
     obs_height = obs.get('height', 20)
-    # 如果飞行高度 > 障碍物高度 + 安全半径，则不阻挡
     return flight_height <= obs_height + safe_radius
 
 def is_path_blocked(p1, p2, obstacles_gcj, flight_height, safe_radius):
@@ -124,9 +122,8 @@ def is_path_blocked(p1, p2, obstacles_gcj, flight_height, safe_radius):
                     return True
     return False
 
-# ==================== 绕行路径生成（左/右/最佳） ====================
+# ==================== 绕行路径生成 ====================
 def get_offset_point(p1, p2, distance_meters, direction='left'):
-    """生成垂直于线段方向的偏移点（距离单位为米，转换为经纬度偏移）"""
     offset_deg = distance_meters / 111000.0
     dx = p2[0] - p1[0]
     dy = p2[1] - p1[1]
@@ -141,7 +138,6 @@ def get_offset_point(p1, p2, distance_meters, direction='left'):
     return [p1[0] + perp_x * offset_deg, p1[1] + perp_y * offset_deg]
 
 def generate_left_right_path(start, end, obstacles_gcj, flight_height, safe_radius, strategy='left'):
-    """生成向左或向右绕行的简单路径（偏移一个安全距离）"""
     offset_dist = safe_radius * 1.5
     offset_point = get_offset_point(start, end, offset_dist, strategy)
     if is_path_blocked(start, offset_point, obstacles_gcj, flight_height, safe_radius) or \
@@ -158,14 +154,12 @@ def find_avoidance_path(start, end, obstacles_gcj, flight_height, safe_radius, s
     elif strategy == 'right':
         return generate_left_right_path(start, end, obstacles_gcj, flight_height, safe_radius, 'right')
     else:
-        # A* 算法
         vertices = []
         for obs in obstacles_gcj:
             if is_obstacle_blocking(obs, flight_height, safe_radius):
                 coords = obs.get('polygon', [])
                 if coords and len(coords) >= 3:
-                    for pt in coords:
-                        vertices.append(pt)
+                    vertices.extend(coords)
         waypoints = [start, end] + vertices
         unique_waypoints = []
         for wp in waypoints:
@@ -222,30 +216,40 @@ def find_avoidance_path(start, end, obstacles_gcj, flight_height, safe_radius, s
 def create_avoidance_path(start, end, obstacles_gcj, flight_height, safe_radius, strategy):
     return find_avoidance_path(start, end, obstacles_gcj, flight_height, safe_radius, strategy)
 
-# ==================== 障碍物管理（含高度） ====================
+# ==================== 障碍物管理（修复加载问题） ====================
 def load_obstacles():
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                obstacles = data.get('obstacles', [])
-                for obs in obstacles:
-                    if 'height' not in obs:
-                        obs['height'] = 20
-                return obstacles
-        except:
-            return []
-    return []
+    """加载障碍物，如果文件不存在则返回空列表"""
+    if not os.path.exists(CONFIG_FILE):
+        return []
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            obstacles = data.get('obstacles', [])
+            # 兼容旧数据：添加默认高度
+            for obs in obstacles:
+                if 'height' not in obs:
+                    obs['height'] = 20
+            # 调试输出（在日志中可见，不影响界面）
+            print(f"[加载] 成功读取 {len(obstacles)} 个障碍物")
+            return obstacles
+    except Exception as e:
+        st.error(f"加载配置文件失败: {e}")
+        return []
 
 def save_obstacles(obstacles):
+    """保存障碍物到文件"""
     data = {
         'obstacles': obstacles,
         'count': len(obstacles),
         'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'version': 'v12.3'
     }
-    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        st.success(f"已保存 {len(obstacles)} 个障碍物到 {os.path.abspath(CONFIG_FILE)}")
+    except Exception as e:
+        st.error(f"保存失败: {e}")
 
 # ==================== 心跳包模拟器 ====================
 class HeartbeatSimulator:
@@ -323,7 +327,7 @@ class HeartbeatSimulator:
             self.history.pop()
         return heartbeat
 
-# ==================== 创建地图（带绘图控件） ====================
+# ==================== 创建地图 ====================
 def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=None, planned_path=None, map_type="satellite", straight_blocked=True):
     if map_type == "satellite":
         tiles = GAODE_SATELLITE_URL
@@ -374,7 +378,7 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
 
 # ==================== 主程序 ====================
 def main():
-    st.title("🏫 无人机地面站系统 - 智能避障（带高度）")
+    st.title("🏫 无人机地面站系统 - 智能避障")
     st.markdown("---")
     
     # 初始化
@@ -409,7 +413,6 @@ def main():
     st.sidebar.subheader("⚙️ 无人机参数")
     drone_speed = st.sidebar.slider("飞行速度系数", min_value=10, max_value=100, value=50, step=5)
     safe_radius = st.sidebar.number_input("安全半径 (米)", min_value=1, max_value=30, value=5, step=1)
-    # ========== 修改点：飞行高度下限改为 0 ==========
     flight_alt = st.sidebar.number_input("飞行高度 (米)", min_value=0, max_value=200, value=st.session_state.flight_altitude, step=5)
     st.session_state.flight_altitude = flight_alt
     
@@ -490,7 +493,7 @@ def main():
                 )
                 st.rerun()
             
-            # 新障碍物高度设置
+            # 新障碍物高度
             st.markdown("#### 🏗️ 新障碍物高度")
             new_obs_height = st.number_input("高度 (米)", min_value=1, max_value=200, value=st.session_state.pending_height, step=5)
             st.session_state.pending_height = new_obs_height
@@ -695,7 +698,7 @@ def main():
                 st.session_state.heartbeat_sim.history = []
                 st.rerun()
     
-    # ==================== 障碍物管理页面 ====================
+    # ==================== 障碍物管理页面（修复加载） ====================
     elif page == "🚧 障碍物管理":
         st.header("🚧 障碍物管理")
         st.info(f"当前共 **{len(st.session_state.obstacles_gcj)}** 个障碍物（含高度信息）")
@@ -727,18 +730,22 @@ def main():
             col_save, col_load = st.columns(2)
             if col_save.button("💾 保存", use_container_width=True):
                 save_obstacles(st.session_state.obstacles_gcj)
-                st.success("已保存")
             if col_load.button("📂 加载", use_container_width=True):
-                st.session_state.obstacles_gcj = load_obstacles()
-                st.session_state.planned_path = create_avoidance_path(
-                    st.session_state.points_gcj['A'], 
-                    st.session_state.points_gcj['B'], 
-                    st.session_state.obstacles_gcj,
-                    st.session_state.flight_altitude,
-                    safe_radius,
-                    selected_strategy
-                )
-                st.rerun()
+                loaded = load_obstacles()
+                if loaded is not None:
+                    st.session_state.obstacles_gcj = loaded
+                    st.success(f"已从文件加载 {len(loaded)} 个障碍物")
+                    st.session_state.planned_path = create_avoidance_path(
+                        st.session_state.points_gcj['A'], 
+                        st.session_state.points_gcj['B'], 
+                        st.session_state.obstacles_gcj,
+                        st.session_state.flight_altitude,
+                        safe_radius,
+                        selected_strategy
+                    )
+                    st.rerun()
+                else:
+                    st.error("加载失败，请检查文件格式")
             
             col_clear_all, col_download = st.columns(2)
             if col_clear_all.button("🗑️ 全部清除", use_container_width=True):
