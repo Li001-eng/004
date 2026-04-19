@@ -218,26 +218,31 @@ def create_avoidance_path(start, end, obstacles_gcj, flight_height, safe_radius,
 
 # ==================== 障碍物管理（修复加载问题） ====================
 def load_obstacles():
-    """加载障碍物，如果文件不存在则返回空列表"""
+    """从 JSON 文件加载障碍物，返回列表，失败时返回空列表"""
     if not os.path.exists(CONFIG_FILE):
+        st.warning(f"配置文件不存在: {CONFIG_FILE}")
         return []
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
             obstacles = data.get('obstacles', [])
-            # 兼容旧数据：添加默认高度
-            for obs in obstacles:
+            # 确保每个障碍物都有必要的字段
+            for idx, obs in enumerate(obstacles):
                 if 'height' not in obs:
                     obs['height'] = 20
-            # 调试输出（在日志中可见，不影响界面）
+                if 'name' not in obs:
+                    obs['name'] = f"建筑物{idx+1}"
+                if 'polygon' not in obs or not isinstance(obs['polygon'], list):
+                    obs['polygon'] = []
+            # 调试信息（在日志中可见）
             print(f"[加载] 成功读取 {len(obstacles)} 个障碍物")
             return obstacles
     except Exception as e:
-        st.error(f"加载配置文件失败: {e}")
+        st.error(f"加载失败: {e}")
         return []
 
 def save_obstacles(obstacles):
-    """保存障碍物到文件"""
+    """保存障碍物到 JSON 文件"""
     data = {
         'obstacles': obstacles,
         'count': len(obstacles),
@@ -385,7 +390,7 @@ def main():
     if "points_gcj" not in st.session_state:
         st.session_state.points_gcj = {'A': DEFAULT_A_GCJ.copy(), 'B': DEFAULT_B_GCJ.copy()}
     if "obstacles_gcj" not in st.session_state:
-        st.session_state.obstacles_gcj = load_obstacles()
+        st.session_state.obstacles_gcj = load_obstacles()  # 启动时自动加载
     if "heartbeat_sim" not in st.session_state:
         st.session_state.heartbeat_sim = HeartbeatSimulator(st.session_state.points_gcj['A'].copy())
     if "last_hb_time" not in st.session_state:
@@ -698,7 +703,7 @@ def main():
                 st.session_state.heartbeat_sim.history = []
                 st.rerun()
     
-    # ==================== 障碍物管理页面（修复加载） ====================
+    # ==================== 障碍物管理页面 ====================
     elif page == "🚧 障碍物管理":
         st.header("🚧 障碍物管理")
         st.info(f"当前共 **{len(st.session_state.obstacles_gcj)}** 个障碍物（含高度信息）")
@@ -734,7 +739,7 @@ def main():
                 loaded = load_obstacles()
                 if loaded is not None:
                     st.session_state.obstacles_gcj = loaded
-                    st.success(f"已从文件加载 {len(loaded)} 个障碍物")
+                    st.success(f"✅ 已从文件加载 {len(loaded)} 个障碍物")
                     st.session_state.planned_path = create_avoidance_path(
                         st.session_state.points_gcj['A'], 
                         st.session_state.points_gcj['B'], 
