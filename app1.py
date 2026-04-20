@@ -11,7 +11,7 @@ from datetime import datetime
 import pandas as pd
 
 # ==================== 页面配置 ====================
-st.set_page_config(page_title="无人机地面站系统 - 智能避障（修复版）", layout="wide")
+st.set_page_config(page_title="无人机地面站系统 - 智能避障（修复递归）", layout="wide")
 
 # ==================== 坐标 ====================
 SCHOOL_CENTER_GCJ = [118.7490, 32.2340]
@@ -121,15 +121,13 @@ def is_path_blocked(p1, p2, obstacles_gcj, flight_height, safe_radius):
                     return True
     return False
 
-# ==================== 绕行路径生成（左/右） ====================
+# ==================== 绕行路径生成（迭代版，无递归） ====================
 def get_closest_point_on_polygon(p1, p2, polygon):
-    """返回多边形上距离线段 (p1,p2) 最近的点"""
     min_dist = float('inf')
     closest = None
     for i in range(len(polygon)):
         p3 = polygon[i]
         p4 = polygon[(i+1)%len(polygon)]
-        # 采样线段上的点
         t = 0
         while t <= 1.0:
             point = [p3[0] + (p4[0]-p3[0])*t, p3[1] + (p4[1]-p3[1])*t]
@@ -149,8 +147,8 @@ def get_closest_point_on_polygon(p1, p2, polygon):
             t += 0.05
     return closest
 
-def generate_side_path(start, end, obstacles_gcj, flight_height, safe_radius, side='left'):
-    """生成向左或向右绕行路径"""
+def generate_side_path(start, end, obstacles_gcj, flight_height, safe_radius, side='left', max_attempts=5):
+    """生成向左或向右绕行路径，使用迭代尝试不同偏移距离，避免递归"""
     # 找出所有阻挡的障碍物
     blocking_obs = []
     for obs in obstacles_gcj:
@@ -177,30 +175,23 @@ def generate_side_path(start, end, obstacles_gcj, flight_height, safe_radius, si
     if side == 'right':
         perp_x = -perp_x
         perp_y = -perp_y
-    # 偏移距离（米转度）
-    offset_m = safe_radius * 2.0
-    offset_deg = offset_m / 111000.0
-    waypoint = [closest[0] + perp_x * offset_deg, closest[1] + perp_y * offset_deg]
-    # 如果偏移点仍在多边形内，则加大偏移
-    max_attempts = 5
-    attempt = 0
-    while attempt < max_attempts and point_in_polygon(waypoint, poly):
-        offset_m += safe_radius
+    # 尝试不同偏移距离
+    for attempt in range(1, max_attempts + 1):
+        offset_m = safe_radius * 2.0 * attempt
         offset_deg = offset_m / 111000.0
         waypoint = [closest[0] + perp_x * offset_deg, closest[1] + perp_y * offset_deg]
-        attempt += 1
-    # 生成路径，并检查分段是否被阻挡
-    if is_path_blocked(start, waypoint, obstacles_gcj, flight_height, safe_radius) or \
-       is_path_blocked(waypoint, end, obstacles_gcj, flight_height, safe_radius):
-        # 递归处理
-        left_part = generate_side_path(start, waypoint, obstacles_gcj, flight_height, safe_radius, side)
-        right_part = generate_side_path(waypoint, end, obstacles_gcj, flight_height, safe_radius, side)
-        return left_part[:-1] + right_part
-    return [start, waypoint, end]
+        # 检查偏移点是否在多边形内
+        if point_in_polygon(waypoint, poly):
+            continue
+        # 检查分段是否被阻挡
+        if not is_path_blocked(start, waypoint, obstacles_gcj, flight_height, safe_radius) and \
+           not is_path_blocked(waypoint, end, obstacles_gcj, flight_height, safe_radius):
+            return [start, waypoint, end]
+    # 所有尝试失败，返回直线（可能仍阻挡，但避免崩溃）
+    return [start, end]
 
 # ==================== A* 路径规划 ====================
 def astar_path(start, end, obstacles_gcj, flight_height, safe_radius):
-    """A* 算法搜索避障路径"""
     # 收集所有障碍物的顶点（仅阻挡的）
     vertices = []
     for obs in obstacles_gcj:
@@ -208,15 +199,12 @@ def astar_path(start, end, obstacles_gcj, flight_height, safe_radius):
             coords = obs.get('polygon', [])
             if coords and len(coords) >= 3:
                 vertices.extend(coords)
-    # 添加起点和终点
     waypoints = [start, end] + vertices
-    # 去重
     unique = []
     for wp in waypoints:
         if not any(abs(wp[0]-u[0])<1e-6 and abs(wp[1]-u[1])<1e-6 for u in unique):
             unique.append(wp)
     n = len(unique)
-    # 构建图
     graph = {}
     for i in range(n):
         graph[i] = []
@@ -225,12 +213,10 @@ def astar_path(start, end, obstacles_gcj, flight_height, safe_radius):
                 continue
             if not is_path_blocked(unique[i], unique[j], obstacles_gcj, flight_height, safe_radius):
                 graph[i].append((j, distance(unique[i], unique[j])))
-    # 找索引
     start_idx = next((i for i,wp in enumerate(unique) if abs(wp[0]-start[0])<1e-6 and abs(wp[1]-start[1])<1e-6), None)
     end_idx = next((i for i,wp in enumerate(unique) if abs(wp[0]-end[0])<1e-6 and abs(wp[1]-end[1])<1e-6), None)
     if start_idx is None or end_idx is None:
         return [start, end]
-    # A*
     import heapq
     open_set = [(0, start_idx)]
     came_from = {}
@@ -247,7 +233,6 @@ def astar_path(start, end, obstacles_gcj, flight_height, safe_radius):
                 current = came_from[current]
             path.append(unique[start_idx])
             path.reverse()
-            # 简化路径
             simplified = [path[0]]
             for i in range(1, len(path)-1):
                 prev = simplified[-1]
@@ -278,7 +263,7 @@ def create_avoidance_path(start, end, obstacles_gcj, flight_height, safe_radius,
     else:
         return astar_path(start, end, obstacles_gcj, flight_height, safe_radius)
 
-# ==================== 障碍物持久化（修复加载） ====================
+# ==================== 障碍物持久化 ====================
 def load_obstacles():
     if not os.path.exists(CONFIG_FILE):
         return []
@@ -418,7 +403,7 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
 
 # ==================== 主程序 ====================
 def main():
-    st.title("🏫 无人机地面站系统 - 智能避障（修复版）")
+    st.title("🏫 无人机地面站系统 - 智能避障（修复递归）")
     st.markdown("---")
     
     # 初始化状态
