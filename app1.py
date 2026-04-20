@@ -11,19 +11,17 @@ from datetime import datetime
 import pandas as pd
 
 # ==================== 页面配置 ====================
-st.set_page_config(page_title="无人机地面站系统 - 智能避障（修复递归）", layout="wide")
+st.set_page_config(page_title="无人机地面站系统 - 智能避障（稳定版）", layout="wide")
 
 # ==================== 坐标 ====================
 SCHOOL_CENTER_GCJ = [118.7490, 32.2340]
 DEFAULT_A_GCJ = [118.746956, 32.232945]
 DEFAULT_B_GCJ = [118.751589, 32.235204]
 
-CONFIG_FILE = "obstacle_config.json"
-
 GAODE_SATELLITE_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
 GAODE_VECTOR_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
 
-# ==================== 坐标系转换函数 ====================
+# ==================== 坐标系转换（不变） ====================
 def gcj02_to_wgs84(lng, lat):
     a = 6378245.0
     ee = 0.00669342162296594323
@@ -121,34 +119,24 @@ def is_path_blocked(p1, p2, obstacles_gcj, flight_height, safe_radius):
                     return True
     return False
 
-# ==================== 绕行路径生成（迭代版，无递归） ====================
-def get_closest_point_on_polygon(p1, p2, polygon):
-    min_dist = float('inf')
-    closest = None
-    for i in range(len(polygon)):
-        p3 = polygon[i]
-        p4 = polygon[(i+1)%len(polygon)]
-        t = 0
-        while t <= 1.0:
-            point = [p3[0] + (p4[0]-p3[0])*t, p3[1] + (p4[1]-p3[1])*t]
-            dx = p2[0]-p1[0]
-            dy = p2[1]-p1[1]
-            if dx==0 and dy==0:
-                d = distance(point, p1)
-            else:
-                t2 = ((point[0]-p1[0])*dx + (point[1]-p1[1])*dy) / (dx*dx+dy*dy)
-                if t2 < 0: proj = p1
-                elif t2 > 1: proj = p2
-                else: proj = [p1[0]+t2*dx, p1[1]+t2*dy]
-                d = distance(point, proj)
-            if d < min_dist:
-                min_dist = d
-                closest = point
-            t += 0.05
-    return closest
+# ==================== 绕行路径生成（改进版） ====================
+def get_polygon_extreme_points(polygon, direction_vec):
+    """获取多边形在方向向量上的最左和最右顶点（相对于线段方向）"""
+    # direction_vec: 从起点指向终点的单位向量
+    # 计算每个顶点到线段起点的投影值
+    proj_vals = []
+    for pt in polygon:
+        # 投影长度（有符号）
+        proj = pt[0]*direction_vec[0] + pt[1]*direction_vec[1]
+        proj_vals.append(proj)
+    if not proj_vals:
+        return None, None
+    min_idx = proj_vals.index(min(proj_vals))
+    max_idx = proj_vals.index(max(proj_vals))
+    return polygon[min_idx], polygon[max_idx]
 
-def generate_side_path(start, end, obstacles_gcj, flight_height, safe_radius, side='left', max_attempts=5):
-    """生成向左或向右绕行路径，使用迭代尝试不同偏移距离，避免递归"""
+def generate_side_path_improved(start, end, obstacles_gcj, flight_height, safe_radius, side='left'):
+    """改进的绕行算法：在障碍物两侧生成绕行点"""
     # 找出所有阻挡的障碍物
     blocking_obs = []
     for obs in obstacles_gcj:
@@ -161,38 +149,43 @@ def generate_side_path(start, end, obstacles_gcj, flight_height, safe_radius, si
     # 取第一个阻挡物
     obs = blocking_obs[0]
     poly = obs['polygon']
-    closest = get_closest_point_on_polygon(start, end, poly)
-    if closest is None:
-        return [start, end]
-    # 计算垂直方向
+    # 计算线段方向单位向量
     dx = end[0] - start[0]
     dy = end[1] - start[1]
     length = math.hypot(dx, dy)
     if length == 0:
         return [start, end]
-    perp_x = -dy / length
-    perp_y = dx / length
+    dir_vec = (dx/length, dy/length)
+    # 垂直方向单位向量
+    perp_vec = (-dir_vec[1], dir_vec[0])  # 左侧
     if side == 'right':
-        perp_x = -perp_x
-        perp_y = -perp_y
-    # 尝试不同偏移距离
-    for attempt in range(1, max_attempts + 1):
-        offset_m = safe_radius * 2.0 * attempt
-        offset_deg = offset_m / 111000.0
-        waypoint = [closest[0] + perp_x * offset_deg, closest[1] + perp_y * offset_deg]
-        # 检查偏移点是否在多边形内
-        if point_in_polygon(waypoint, poly):
-            continue
-        # 检查分段是否被阻挡
+        perp_vec = (dir_vec[1], -dir_vec[0])
+    # 获取多边形在方向上的最左和最右顶点（实际上是投影最小和最大）
+    left_vertex, right_vertex = get_polygon_extreme_points(poly, dir_vec)
+    # 选择绕行顶点：左侧绕行用最左顶点，右侧绕行用最右顶点
+    base_vertex = left_vertex if side == 'left' else right_vertex
+    if base_vertex is None:
+        return [start, end]
+    # 在垂直方向上偏移安全距离
+    offset_m = safe_radius * 2.0
+    offset_deg = offset_m / 111000.0
+    waypoint = [base_vertex[0] + perp_vec[0]*offset_deg, base_vertex[1] + perp_vec[1]*offset_deg]
+    # 尝试增加偏移直到路径不被阻挡
+    max_attempts = 5
+    for attempt in range(1, max_attempts+1):
         if not is_path_blocked(start, waypoint, obstacles_gcj, flight_height, safe_radius) and \
            not is_path_blocked(waypoint, end, obstacles_gcj, flight_height, safe_radius):
             return [start, waypoint, end]
-    # 所有尝试失败，返回直线（可能仍阻挡，但避免崩溃）
-    return [start, end]
+        # 增加偏移距离
+        offset_m = safe_radius * 2.0 * (attempt + 1)
+        offset_deg = offset_m / 111000.0
+        waypoint = [base_vertex[0] + perp_vec[0]*offset_deg, base_vertex[1] + perp_vec[1]*offset_deg]
+    # 如果仍然失败，尝试在另一侧绕行（交叉尝试）
+    # 简单起见，返回A*结果
+    return None  # 表示失败，交由上层处理
 
 # ==================== A* 路径规划 ====================
 def astar_path(start, end, obstacles_gcj, flight_height, safe_radius):
-    # 收集所有障碍物的顶点（仅阻挡的）
     vertices = []
     for obs in obstacles_gcj:
         if is_obstacle_blocking(obs, flight_height, safe_radius):
@@ -257,41 +250,38 @@ def create_avoidance_path(start, end, obstacles_gcj, flight_height, safe_radius,
     if not is_path_blocked(start, end, obstacles_gcj, flight_height, safe_radius):
         return [start, end]
     if strategy == 'left':
-        return generate_side_path(start, end, obstacles_gcj, flight_height, safe_radius, 'left')
+        path = generate_side_path_improved(start, end, obstacles_gcj, flight_height, safe_radius, 'left')
+        if path:
+            return path
+        # 失败则回退到A*
+        return astar_path(start, end, obstacles_gcj, flight_height, safe_radius)
     elif strategy == 'right':
-        return generate_side_path(start, end, obstacles_gcj, flight_height, safe_radius, 'right')
+        path = generate_side_path_improved(start, end, obstacles_gcj, flight_height, safe_radius, 'right')
+        if path:
+            return path
+        return astar_path(start, end, obstacles_gcj, flight_height, safe_radius)
     else:
         return astar_path(start, end, obstacles_gcj, flight_height, safe_radius)
 
-# ==================== 障碍物持久化 ====================
-def load_obstacles():
-    if not os.path.exists(CONFIG_FILE):
-        return []
-    try:
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            obstacles = data.get('obstacles', [])
-            for obs in obstacles:
-                if 'height' not in obs:
-                    obs['height'] = 20
-            return obstacles
-    except Exception as e:
-        st.error(f"加载失败: {e}")
-        return []
+# ==================== 障碍物持久化（无文件，仅内存备份） ====================
+# 不再使用JSON文件，改用 session_state 备份
+def save_obstacles_to_cache():
+    """将当前障碍物保存到缓存"""
+    if 'saved_obstacles' not in st.session_state:
+        st.session_state.saved_obstacles = []
+    # 深拷贝
+    import copy
+    st.session_state.saved_obstacles = copy.deepcopy(st.session_state.obstacles_gcj)
+    st.success(f"已保存 {len(st.session_state.obstacles_gcj)} 个障碍物到缓存")
 
-def save_obstacles(obstacles):
-    data = {
-        'obstacles': obstacles,
-        'count': len(obstacles),
-        'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'version': 'v12.3'
-    }
-    try:
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        st.success(f"已保存 {len(obstacles)} 个障碍物到 {os.path.abspath(CONFIG_FILE)}")
-    except Exception as e:
-        st.error(f"保存失败: {e}")
+def load_obstacles_from_cache():
+    """从缓存加载障碍物"""
+    if 'saved_obstacles' not in st.session_state or not st.session_state.saved_obstacles:
+        st.warning("缓存中无障碍物，请先保存")
+        return False
+    st.session_state.obstacles_gcj = st.session_state.saved_obstacles
+    st.success(f"已从缓存加载 {len(st.session_state.obstacles_gcj)} 个障碍物")
+    return True
 
 # ==================== 心跳包模拟器 ====================
 class HeartbeatSimulator:
@@ -403,14 +393,16 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
 
 # ==================== 主程序 ====================
 def main():
-    st.title("🏫 无人机地面站系统 - 智能避障（修复递归）")
+    st.title("🏫 无人机地面站系统 - 智能避障（稳定版）")
     st.markdown("---")
     
     # 初始化状态
     if "points_gcj" not in st.session_state:
         st.session_state.points_gcj = {'A': DEFAULT_A_GCJ.copy(), 'B': DEFAULT_B_GCJ.copy()}
     if "obstacles_gcj" not in st.session_state:
-        st.session_state.obstacles_gcj = load_obstacles()
+        st.session_state.obstacles_gcj = []
+    if "saved_obstacles" not in st.session_state:
+        st.session_state.saved_obstacles = []
     if "heartbeat_sim" not in st.session_state:
         st.session_state.heartbeat_sim = HeartbeatSimulator(st.session_state.points_gcj['A'].copy())
     if "last_hb_time" not in st.session_state:
@@ -459,7 +451,6 @@ def main():
     st.sidebar.info(f"🏫 校园区域\n🚧 障碍物: {obs_count}\n📌 直线: {'🚫 被阻挡' if straight_blocked else '✅ 畅通'}")
     
     if st.sidebar.button("🔄 刷新数据", use_container_width=True):
-        st.session_state.obstacles_gcj = load_obstacles()
         st.session_state.planned_path = create_avoidance_path(
             st.session_state.points_gcj['A'],
             st.session_state.points_gcj['B'],
@@ -520,7 +511,8 @@ def main():
                         "polygon": st.session_state.pending_polygon,
                         "height": st.session_state.pending_height
                     })
-                    save_obstacles(st.session_state.obstacles_gcj)
+                    st.success(f"已添加障碍物（高度{st.session_state.pending_height}m），当前共 {len(st.session_state.obstacles_gcj)} 个")
+                    st.session_state.pending_polygon = None
                     st.session_state.planned_path = create_avoidance_path(
                         st.session_state.points_gcj['A'],
                         st.session_state.points_gcj['B'],
@@ -529,8 +521,6 @@ def main():
                         safe_radius,
                         selected_strategy
                     )
-                    st.success(f"已添加障碍物（高度{st.session_state.pending_height}m），当前共 {len(st.session_state.obstacles_gcj)} 个")
-                    st.session_state.pending_polygon = None
                     st.rerun()
                 else:
                     st.warning("请先在地图上绘制一个多边形")
@@ -687,7 +677,7 @@ def main():
                 st.session_state.heartbeat_sim.history = []
                 st.rerun()
     
-    # ==================== 障碍物管理页面 ====================
+    # ==================== 障碍物管理页面（无文件，仅缓存） ====================
     elif page == "🚧 障碍物管理":
         st.header("🚧 障碍物管理")
         st.info(f"当前共 **{len(st.session_state.obstacles_gcj)}** 个障碍物（含高度信息）")
@@ -700,7 +690,6 @@ def main():
                     col_height.write(f"高度: {obs.get('height',20)}m")
                     if col_btn.button("删除", key=f"del_{i}"):
                         st.session_state.obstacles_gcj.pop(i)
-                        save_obstacles(st.session_state.obstacles_gcj)
                         st.session_state.planned_path = create_avoidance_path(
                             st.session_state.points_gcj['A'],
                             st.session_state.points_gcj['B'],
@@ -714,13 +703,10 @@ def main():
                 st.write("暂无障碍物")
             st.markdown("---")
             col_save, col_load = st.columns(2)
-            if col_save.button("💾 保存", use_container_width=True):
-                save_obstacles(st.session_state.obstacles_gcj)
-            if col_load.button("📂 加载", use_container_width=True):
-                loaded = load_obstacles()
-                if loaded is not None:
-                    st.session_state.obstacles_gcj = loaded
-                    st.success(f"✅ 已从文件加载 {len(loaded)} 个障碍物")
+            if col_save.button("💾 保存到缓存", use_container_width=True):
+                save_obstacles_to_cache()
+            if col_load.button("📂 从缓存加载", use_container_width=True):
+                if load_obstacles_from_cache():
                     st.session_state.planned_path = create_avoidance_path(
                         st.session_state.points_gcj['A'],
                         st.session_state.points_gcj['B'],
@@ -730,12 +716,9 @@ def main():
                         selected_strategy
                     )
                     st.rerun()
-                else:
-                    st.error("加载失败，请检查文件")
             col_clear_all, col_download = st.columns(2)
             if col_clear_all.button("🗑️ 全部清除", use_container_width=True):
                 st.session_state.obstacles_gcj = []
-                save_obstacles([])
                 st.session_state.planned_path = create_avoidance_path(
                     st.session_state.points_gcj['A'],
                     st.session_state.points_gcj['B'],
