@@ -9,9 +9,10 @@ import json
 import os
 from datetime import datetime
 import pandas as pd
+import copy
 
 # ==================== 页面配置 ====================
-st.set_page_config(page_title="无人机地面站系统 - 智能避障（全新绕行）", layout="wide")
+st.set_page_config(page_title="无人机地面站系统 - 平行偏移绕行", layout="wide")
 
 # ==================== 坐标 ====================
 SCHOOL_CENTER_GCJ = [118.7490, 32.2340]
@@ -21,7 +22,7 @@ DEFAULT_B_GCJ = [118.751589, 32.235204]
 GAODE_SATELLITE_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
 GAODE_VECTOR_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
 
-# ==================== 坐标系转换 ====================
+# ==================== 坐标系转换（保持不变） ====================
 def gcj02_to_wgs84(lng, lat):
     a = 6378245.0
     ee = 0.00669342162296594323
@@ -119,84 +120,41 @@ def is_path_blocked(p1, p2, obstacles_gcj, flight_height, safe_radius):
                     return True
     return False
 
-# ==================== 全新绕行算法 ====================
-def get_obstacle_bounding_box(polygon):
-    """计算多边形的最小包围矩形（经纬度）"""
-    min_x = min(p[0] for p in polygon)
-    max_x = max(p[0] for p in polygon)
-    min_y = min(p[1] for p in polygon)
-    max_y = max(p[1] for p in polygon)
-    return (min_x, min_y, max_x, max_y)
-
-def generate_side_path_new(start, end, obstacles_gcj, flight_height, safe_radius, side='left'):
+# ==================== 平行偏移绕行（新方法） ====================
+def generate_parallel_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, side='left'):
     """
-    全新的绕行算法：
-    对于第一个阻挡的障碍物，计算其包围盒，然后在包围盒的左侧或右侧生成一个绕行点，
-    该点距离包围盒边界安全距离，并确保该点与起点和终点的连线不被任何障碍物阻挡。
+    在起点到终点连线的垂直方向生成平行偏移线，选择第一条无阻挡的直线路径。
+    side: 'left' 或 'right'
     """
-    # 找出所有阻挡的障碍物
-    blocking_obs = []
-    for obs in obstacles_gcj:
-        if is_obstacle_blocking(obs, flight_height, safe_radius):
-            coords = obs.get('polygon', [])
-            if coords and line_intersects_polygon(start, end, coords):
-                blocking_obs.append(obs)
-    if not blocking_obs:
-        return [start, end]
-    # 取第一个阻挡物
-    obs = blocking_obs[0]
-    poly = obs['polygon']
-    bbox = get_obstacle_bounding_box(poly)
-    min_x, min_y, max_x, max_y = bbox
-    # 计算线段的方向角
     dx = end[0] - start[0]
     dy = end[1] - start[1]
     length = math.hypot(dx, dy)
-    if length < 1e-9:
-        return [start, end]
-    # 垂直方向单位向量（指向左侧）
-    perp_x = -dy / length
-    perp_y = dx / length
+    if length == 0:
+        return None
+    # 单位方向向量
+    ux = dx / length
+    uy = dy / length
+    # 垂直单位向量（左转为正）
+    perp_x = -uy
+    perp_y = ux
     if side == 'right':
-        perp_x = -perp_x
-        perp_y = -perp_y
-    # 安全距离（米转度）
-    safe_deg = safe_radius / 111000.0
-    # 尝试多个偏移距离
-    for attempt in range(1, 6):
-        offset = safe_deg * attempt * 2  # 2,4,6,8,10倍安全距离
-        # 在包围盒的侧面生成绕行点：取包围盒在垂直于航线方向上的最外点 + 偏移
-        # 计算包围盒中心在垂直方向上的投影
-        center_x = (min_x + max_x) / 2
-        center_y = (min_y + max_y) / 2
-        # 绕行点 = 中心点 + 垂直方向 * (半宽 + 偏移)
-        # 半宽：包围盒在垂直方向上的宽度
-        half_width = abs((max_x - min_x) * perp_x + (max_y - min_y) * perp_y) / 2
-        waypoint = [center_x + perp_x * (half_width + offset), center_y + perp_y * (half_width + offset)]
-        # 检查路径是否被阻挡
-        if not is_path_blocked(start, waypoint, obstacles_gcj, flight_height, safe_radius) and \
-           not is_path_blocked(waypoint, end, obstacles_gcj, flight_height, safe_radius):
-            # 额外检查绕行点是否在障碍物内部
-            if not point_in_polygon(waypoint, poly):
-                return [start, waypoint, end]
-    # 若所有尝试失败，尝试在另一侧绕行（交换左右）
-    other_side = 'right' if side == 'left' else 'left'
-    for attempt in range(1, 6):
-        offset = safe_deg * attempt * 2
-        perp_x2 = -perp_x if side=='left' else perp_x  # 反向
-        perp_y2 = -perp_y if side=='left' else perp_y
-        center_x = (min_x + max_x) / 2
-        center_y = (min_y + max_y) / 2
-        half_width = abs((max_x - min_x) * perp_x2 + (max_y - min_y) * perp_y2) / 2
-        waypoint = [center_x + perp_x2 * (half_width + offset), center_y + perp_y2 * (half_width + offset)]
-        if not is_path_blocked(start, waypoint, obstacles_gcj, flight_height, safe_radius) and \
-           not is_path_blocked(waypoint, end, obstacles_gcj, flight_height, safe_radius) and \
-           not point_in_polygon(waypoint, poly):
-            return [start, waypoint, end]
-    # 最后回退到A*路径
+        perp_x = uy
+        perp_y = -ux
+    
+    # 偏移距离（米转度）
+    offset_m = safe_radius * 2.0
+    offset_deg = offset_m / 111000.0
+    
+    max_attempts = 12  # 尝试12条线，覆盖足够远的距离
+    for attempt in range(1, max_attempts + 1):
+        offset = offset_deg * attempt
+        p1 = [start[0] + perp_x * offset, start[1] + perp_y * offset]
+        p2 = [end[0] + perp_x * offset, end[1] + perp_y * offset]
+        if not is_path_blocked(p1, p2, obstacles_gcj, flight_height, safe_radius):
+            return [p1, p2]
     return None
 
-# ==================== A* 路径规划 ====================
+# ==================== A* 路径规划（备用） ====================
 def astar_path(start, end, obstacles_gcj, flight_height, safe_radius):
     vertices = []
     for obs in obstacles_gcj:
@@ -259,25 +217,33 @@ def astar_path(start, end, obstacles_gcj, flight_height, safe_radius):
     return [start, end]
 
 def create_avoidance_path(start, end, obstacles_gcj, flight_height, safe_radius, strategy):
+    # 直线畅通则直接返回直线
     if not is_path_blocked(start, end, obstacles_gcj, flight_height, safe_radius):
         return [start, end]
     if strategy == 'left':
-        path = generate_side_path_new(start, end, obstacles_gcj, flight_height, safe_radius, 'left')
+        path = generate_parallel_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, 'left')
         if path:
             return path
-        # 回退到A*
+        # 左侧失败，尝试右侧
+        path = generate_parallel_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, 'right')
+        if path:
+            return path
         return astar_path(start, end, obstacles_gcj, flight_height, safe_radius)
     elif strategy == 'right':
-        path = generate_side_path_new(start, end, obstacles_gcj, flight_height, safe_radius, 'right')
+        path = generate_parallel_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, 'right')
+        if path:
+            return path
+        path = generate_parallel_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, 'left')
         if path:
             return path
         return astar_path(start, end, obstacles_gcj, flight_height, safe_radius)
     else:
         return astar_path(start, end, obstacles_gcj, flight_height, safe_radius)
 
-# ==================== 障碍物持久化（内存缓存） ====================
+# ==================== 障碍物管理（内存缓存） ====================
 def save_obstacles_to_cache():
-    import copy
+    if 'saved_obstacles' not in st.session_state:
+        st.session_state.saved_obstacles = []
     st.session_state.saved_obstacles = copy.deepcopy(st.session_state.obstacles_gcj)
     st.success(f"已保存 {len(st.session_state.obstacles_gcj)} 个障碍物到缓存")
 
@@ -399,7 +365,7 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
 
 # ==================== 主程序 ====================
 def main():
-    st.title("🏫 无人机地面站系统 - 全新绕行算法")
+    st.title("🏫 无人机地面站系统 - 平行偏移绕行")
     st.markdown("---")
     
     # 初始化状态
@@ -683,7 +649,7 @@ def main():
                 st.session_state.heartbeat_sim.history = []
                 st.rerun()
     
-    # ==================== 障碍物管理页面 ====================
+    # ==================== 障碍物管理页面（内存缓存） ====================
     elif page == "🚧 障碍物管理":
         st.header("🚧 障碍物管理")
         st.info(f"当前共 **{len(st.session_state.obstacles_gcj)}** 个障碍物（含高度信息）")
