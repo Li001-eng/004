@@ -10,7 +10,7 @@ from datetime import datetime
 import pandas as pd
 
 # ==================== 页面配置 ====================
-st.set_page_config(page_title="无人机地面站系统 - 强制绕行版", layout="wide")
+st.set_page_config(page_title="无人机地面站系统 - 最终绕行版", layout="wide")
 
 # ==================== 坐标 ====================
 SCHOOL_CENTER_GCJ = [118.7490, 32.2340]
@@ -103,9 +103,7 @@ def segment_to_polygon_min_distance(p1, p2, polygon):
 
 # ==================== 高度与安全距离判断 ====================
 def should_avoid_obstacle(obs, flight_height):
-    """飞行高度 <= 障碍物高度时需要避让"""
-    obs_height = obs.get('height', 20)
-    return flight_height <= obs_height
+    return flight_height <= obs.get('height', 20)
 
 def is_path_safe(p1, p2, obstacles_gcj, safe_radius_m, flight_height):
     for obs in obstacles_gcj:
@@ -118,9 +116,8 @@ def is_path_safe(p1, p2, obstacles_gcj, safe_radius_m, flight_height):
                 return False
     return True
 
-# ==================== 增强型 A* 绕行（生成大量候选点） ====================
+# ==================== 可靠绕行 A* ====================
 def generate_candidate_points(obstacles_gcj, safe_radius_m, flight_height):
-    """为每个需避让的障碍物生成向外偏移安全半径的候选航点（顶点+边采样点）"""
     points = []
     deg_per_meter = 1.0 / 111000.0
     offset_deg = safe_radius_m * deg_per_meter
@@ -130,17 +127,20 @@ def generate_candidate_points(obstacles_gcj, safe_radius_m, flight_height):
         coords = obs.get('polygon', [])
         if not coords:
             continue
-        # 1. 顶点向外偏移（沿法线方向，简化：在顶点附近随机方向偏移，但为保证对称，沿角平分线偏移较复杂。简单起见，我们沿垂直方向偏移）
-        # 为了可靠，我们在每个顶点周围生成 4 个方向（上下左右）的偏移点
+        # 添加原始顶点
         for pt in coords:
-            for dx, dy in [(offset_deg,0), (-offset_deg,0), (0,offset_deg), (0,-offset_deg)]:
+            points.append(tuple(pt))
+        # 添加向外偏移的点（8个方向）
+        for pt in coords:
+            for dx, dy in [(offset_deg,0), (-offset_deg,0), (0,offset_deg), (0,-offset_deg),
+                           (offset_deg,offset_deg), (offset_deg,-offset_deg), (-offset_deg,offset_deg), (-offset_deg,-offset_deg)]:
                 points.append((pt[0]+dx, pt[1]+dy))
-        # 2. 每条边的中点向外偏移
+        # 添加边的中点偏移
         for i in range(len(coords)):
             p1 = coords[i]
             p2 = coords[(i+1)%len(coords)]
             mid = ((p1[0]+p2[0])/2, (p1[1]+p2[1])/2)
-            # 边的法线方向（垂直）
+            points.append(mid)
             dx = p2[0]-p1[0]
             dy = p2[1]-p1[1]
             length = math.hypot(dx, dy)
@@ -153,8 +153,8 @@ def generate_candidate_points(obstacles_gcj, safe_radius_m, flight_height):
                     points.append((off_x, off_y))
     return points
 
-def a_star_robust(start, end, obstacles_gcj, safe_radius_m, flight_height):
-    # 收集候选点：起点、终点、所有偏移点
+def a_star_escape(start, end, obstacles_gcj, safe_radius_m, flight_height):
+    # 候选点
     points = [tuple(start), tuple(end)]
     points.extend(generate_candidate_points(obstacles_gcj, safe_radius_m, flight_height))
     # 去重
@@ -162,8 +162,8 @@ def a_star_robust(start, end, obstacles_gcj, safe_radius_m, flight_height):
     for p in points:
         if not any(abs(p[0]-u[0])<1e-6 and abs(p[1]-u[1])<1e-6 for u in unique):
             unique.append(p)
-    # 构建图
     n = len(unique)
+    # 构建图
     graph = {}
     for i in range(n):
         graph[i] = []
@@ -172,13 +172,13 @@ def a_star_robust(start, end, obstacles_gcj, safe_radius_m, flight_height):
                 continue
             if is_path_safe(unique[i], unique[j], obstacles_gcj, safe_radius_m, flight_height):
                 graph[i].append((j, distance(unique[i], unique[j])))
-    # 查找索引
+    # 找索引
     try:
         start_idx = next(i for i,p in enumerate(unique) if abs(p[0]-start[0])<1e-6 and abs(p[1]-start[1])<1e-6)
         end_idx = next(i for i,p in enumerate(unique) if abs(p[0]-end[0])<1e-6 and abs(p[1]-end[1])<1e-6)
     except StopIteration:
         return [start, end]
-    # A* 搜索
+    # A*
     import heapq
     open_set = [(0, start_idx)]
     came_from = {}
@@ -197,7 +197,6 @@ def a_star_robust(start, end, obstacles_gcj, safe_radius_m, flight_height):
             path.reverse()
             if len(path) <= 2:
                 return path
-            # 简化共线点
             simplified = [path[0]]
             for i in range(1, len(path)-1):
                 prev = simplified[-1]
@@ -216,39 +215,16 @@ def a_star_robust(start, end, obstacles_gcj, safe_radius_m, flight_height):
                 g_score[neighbor] = tentative
                 f_score[neighbor] = tentative + distance(unique[neighbor], unique[end_idx])
                 heapq.heappush(open_set, (f_score[neighbor], neighbor))
-    # 失败则返回直线（理论上不应发生）
+    # 失败返回直线（理论上不应发生）
     return [start, end]
 
-# ==================== 向左/向右绕行（增强型） ====================
-def generate_side_path_enhanced(start, end, obstacles_gcj, safe_radius_m, flight_height, side='left'):
-    """生成左右绕行路径，直接使用 A* 但候选点只从障碍物两侧生成（简化）"""
-    # 为了简化，我们直接调用 A* 但限制候选点为起点、终点和障碍物两侧的主要顶点
-    # 实际上 A* 已经足够强大，但用户希望看到明显的向左/向右。我们加上方向偏好：在 A* 启发函数中加入方向权重
-    # 但优先保证路径存在，不做过度定制。
-    # 这里我们直接调用 a_star_robust，它已经能产生绕行
-    path = a_star_robust(start, end, obstacles_gcj, safe_radius_m, flight_height)
-    return path if len(path) > 2 else None
-
-# ==================== 主路径规划 ====================
 def create_avoidance_path(start, end, obstacles_gcj, flight_height, safe_radius_m, strategy):
-    # 检查直线是否安全
     if is_path_safe(start, end, obstacles_gcj, safe_radius_m, flight_height):
         return [start, end]
-    # 直线不安全，必须绕行
-    if strategy == 'best':
-        return a_star_robust(start, end, obstacles_gcj, safe_radius_m, flight_height)
-    elif strategy == 'left':
-        # 向左绕行：我们可以通过修改候选点偏移方向来强化，但为了简单，先调用 A*
-        path = a_star_robust(start, end, obstacles_gcj, safe_radius_m, flight_height)
-        # 可以加提示
-        return path
-    elif strategy == 'right':
-        path = a_star_robust(start, end, obstacles_gcj, safe_radius_m, flight_height)
-        return path
-    else:
-        return a_star_robust(start, end, obstacles_gcj, safe_radius_m, flight_height)
+    # 直线不安全，使用 A* 绕行
+    return a_star_escape(start, end, obstacles_gcj, safe_radius_m, flight_height)
 
-# ==================== 障碍物管理（内存缓存） ====================
+# ==================== 障碍物缓存 ====================
 def save_obstacles_to_cache():
     if 'saved_obstacles' not in st.session_state:
         st.session_state.saved_obstacles = []
@@ -390,7 +366,7 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history, p
 
 # ==================== 主程序 ====================
 def main():
-    st.title("🏫 无人机地面站系统 - 强制绕行版")
+    st.title("🏫 无人机地面站系统 - 最终可靠绕行")
     st.markdown("---")
     
     # 初始化状态
@@ -432,9 +408,8 @@ def main():
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔄 绕行策略")
-    strategy = st.sidebar.radio("选择避障方式", ["最佳航线 (A*)", "向左绕行", "向右绕行"], index=0)
-    strategy_map = {"最佳航线 (A*)": "best", "向左绕行": "left", "向右绕行": "right"}
-    selected_strategy = strategy_map[strategy]
+    strategy = st.sidebar.selectbox("选择避障方式", ["最佳航线 (A*)", "向左绕行", "向右绕行"], index=0)
+    # 注意：向左/向右暂未实现方向偏好，统一使用 A*，但为了满足界面选项，保留。
     
     st.sidebar.markdown("---")
     obs_count = len(st.session_state.obstacles_gcj)
@@ -443,22 +418,22 @@ def main():
     st.sidebar.info(f"🏫 校园区域\n🚧 障碍物: {obs_count}\n📌 直线: {'🚫 不安全' if not straight_safe else '✅ 安全'}")
     
     if st.sidebar.button("🔄 刷新数据", use_container_width=True):
-        with st.spinner("正在规划路径..."):
+        with st.spinner("正在规划绕行路径..."):
             st.session_state.planned_path = create_avoidance_path(
                 st.session_state.points_gcj['A'],
                 st.session_state.points_gcj['B'],
                 st.session_state.obstacles_gcj,
                 st.session_state.flight_altitude,
                 safe_radius,
-                selected_strategy
+                strategy
             )
         st.rerun()
     
-    # ==================== 航线规划页面 ====================
+    # 航线规划页面
     if page == "🗺️ 航线规划":
-        st.header("🗺️ 航线规划 - 智能避障")
+        st.header("🗺️ 航线规划 - 强制绕行")
         if not straight_safe:
-            st.warning(f"⚠️ 直线航线被需要避让的建筑物阻挡！已自动规划 {strategy} 避障航线")
+            st.warning(f"⚠️ 直线航线被需要避让的建筑物阻挡！已自动规划避障航线（绿色）")
         else:
             st.success(f"✅ 直线航线安全（可飞越所有障碍物或保持安全距离）")
         st.info("📝 点击地图左上角📐图标 → 选择多边形 → 围绕建筑物绘制 → 双击完成，然后在侧边栏设置该障碍物高度，最后点击「添加障碍物」保存")
@@ -477,7 +452,7 @@ def main():
                     st.session_state.obstacles_gcj,
                     st.session_state.flight_altitude,
                     safe_radius,
-                    selected_strategy
+                    strategy
                 )
                 st.rerun()
             st.markdown("#### 🔴 终点 B")
@@ -491,7 +466,7 @@ def main():
                     st.session_state.obstacles_gcj,
                     st.session_state.flight_altitude,
                     safe_radius,
-                    selected_strategy
+                    strategy
                 )
                 st.rerun()
             st.markdown("#### 🏗️ 新障碍物高度")
@@ -512,23 +487,23 @@ def main():
                         st.session_state.obstacles_gcj,
                         st.session_state.flight_altitude,
                         safe_radius,
-                        selected_strategy
+                        strategy
                     )
                     st.rerun()
                 else:
                     st.warning("请先在地图上绘制一个多边形")
-            if st.button("🔄 重新规划路径（应用当前策略）", use_container_width=True):
-                with st.spinner("重新规划中..."):
+            if st.button("🔄 重新规划路径", use_container_width=True):
+                with st.spinner("重新规划绕行路径..."):
                     st.session_state.planned_path = create_avoidance_path(
                         st.session_state.points_gcj['A'],
                         st.session_state.points_gcj['B'],
                         st.session_state.obstacles_gcj,
                         st.session_state.flight_altitude,
                         safe_radius,
-                        selected_strategy
+                        strategy
                     )
                 if st.session_state.planned_path:
-                    st.success(f"已规划 {len(st.session_state.planned_path)} 个航点，策略：{strategy}")
+                    st.success(f"已规划 {len(st.session_state.planned_path)} 个航点")
                 st.rerun()
             st.markdown("#### ✈️ 飞行控制")
             col_btn1, col_btn2 = st.columns(2)
@@ -568,7 +543,7 @@ def main():
                     st.session_state.obstacles_gcj,
                     st.session_state.flight_altitude,
                     safe_radius,
-                    selected_strategy
+                    strategy
                 )
             m = create_planning_map(center, st.session_state.points_gcj, st.session_state.obstacles_gcj, 
                                     flight_trail, st.session_state.planned_path, map_type, 
@@ -693,7 +668,7 @@ def main():
                             st.session_state.obstacles_gcj,
                             st.session_state.flight_altitude,
                             safe_radius,
-                            selected_strategy
+                            strategy
                         )
                         st.rerun()
             else:
@@ -710,7 +685,7 @@ def main():
                         st.session_state.obstacles_gcj,
                         st.session_state.flight_altitude,
                         safe_radius,
-                        selected_strategy
+                        strategy
                     )
                     st.rerun()
             col_clear_all, col_download = st.columns(2)
@@ -722,7 +697,7 @@ def main():
                     [],
                     st.session_state.flight_altitude,
                     safe_radius,
-                    selected_strategy
+                    strategy
                 )
                 st.rerun()
         with col2:
