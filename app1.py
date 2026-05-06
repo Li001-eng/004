@@ -683,7 +683,7 @@ def main():
         with col_topology:
             st.subheader("🔗 通信链路拓扑")
             st.markdown("""GCS (地面站) → OBC (机载计算机) → FCU (飞控) → UAV""")
-               st.caption("数据流：遥控指令 → 飞控 → 执行器 | 遥测数据 ← 飞控 ← 传感器")
+            st.caption("数据流：遥控指令 → 飞控 → 执行器 | 遥测数据 ← 飞控 ← 传感器")
 
     st.markdown("---")
 
