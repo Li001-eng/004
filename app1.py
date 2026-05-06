@@ -10,7 +10,7 @@ from datetime import datetime
 import pandas as pd
 
 # ==================== 页面配置 ====================
-st.set_page_config(page_title="无人机地面站系统 - RRT绕行版", layout="wide")
+st.set_page_config(page_title="无人机地面站系统 - 最终绕行版", layout="wide")
 
 # ==================== 坐标 ====================
 SCHOOL_CENTER_GCJ = [118.7490, 32.2340]
@@ -116,94 +116,113 @@ def is_path_safe(p1, p2, obstacles_gcj, safe_radius_m, flight_height):
                 return False
     return True
 
-# ==================== 新增/修改：RRT 算法实现 ====================
-class RRTNode:
-    def __init__(self, point):
-        self.point = point  # (lng, lat)
-        self.parent = None
+# ==================== 可靠绕行 A* ====================
+def generate_candidate_points(obstacles_gcj, safe_radius_m, flight_height):
+    points = []
+    deg_per_meter = 1.0 / 111000.0
+    offset_deg = safe_radius_m * deg_per_meter
+    for obs in obstacles_gcj:
+        if not should_avoid_obstacle(obs, flight_height):
+            continue
+        coords = obs.get('polygon', [])
+        if not coords:
+            continue
+        # 添加原始顶点
+        for pt in coords:
+            points.append(tuple(pt))
+        # 添加向外偏移的点（8个方向）
+        for pt in coords:
+            for dx, dy in [(offset_deg,0), (-offset_deg,0), (0,offset_deg), (0,-offset_deg),
+                           (offset_deg,offset_deg), (offset_deg,-offset_deg), (-offset_deg,offset_deg), (-offset_deg,-offset_deg)]:
+                points.append((pt[0]+dx, pt[1]+dy))
+        # 添加边的中点偏移
+        for i in range(len(coords)):
+            p1 = coords[i]
+            p2 = coords[(i+1)%len(coords)]
+            mid = ((p1[0]+p2[0])/2, (p1[1]+p2[1])/2)
+            points.append(mid)
+            dx = p2[0]-p1[0]
+            dy = p2[1]-p1[1]
+            length = math.hypot(dx, dy)
+            if length > 0:
+                perp_x = -dy / length
+                perp_y = dx / length
+                for sign in [-1, 1]:
+                    off_x = mid[0] + perp_x * offset_deg * sign
+                    off_y = mid[1] + perp_y * offset_deg * sign
+                    points.append((off_x, off_y))
+    return points
 
-def rrt_path_planning(start, end, obstacles_gcj, safe_radius_m, flight_height, 
-                       max_iter=1000, step_size=0.0003, goal_sample_rate=0.1):
-    """
-    RRT 路径规划算法
-    :param start: 起点 (lng, lat)
-    :param end: 终点 (lng, lat)
-    :param obstacles_gcj: 障碍物列表
-    :param safe_radius_m: 安全半径
-    :param flight_height: 飞行高度
-    :param max_iter: 最大迭代次数
-    :param step_size: 步长（经纬度）
-    :param goal_sample_rate: 以多大概率直接采样终点
-    :return: 路径点列表
-    """
-    start_node = RRTNode(start)
-    end_node = RRTNode(end)
-    node_list = [start_node]
-
-    for i in range(max_iter):
-        # 1. 采样随机点
-        if random.random() < goal_sample_rate:
-            rnd_point = end
-        else:
-            # 在起点和终点附近的区域采样
-            min_lng = min(start[0], end[0]) - 0.01
-            max_lng = max(start[0], end[0]) + 0.01
-            min_lat = min(start[1], end[1]) - 0.01
-            max_lat = max(start[1], end[1]) + 0.01
-            rnd_point = (random.uniform(min_lng, max_lng), random.uniform(min_lat, max_lat))
-
-        # 2. 找到树中离随机点最近的节点
-        nearest_node = min(node_list, key=lambda node: distance(node.point, rnd_point))
-
-        # 3. 从最近节点向随机点扩展
-        theta = math.atan2(rnd_point[1] - nearest_node.point[1], rnd_point[0] - nearest_node.point[0])
-        new_point = (
-            nearest_node.point[0] + step_size * math.cos(theta),
-            nearest_node.point[1] + step_size * math.sin(theta)
-        )
-
-        # 4. 检查新边是否安全
-        if is_path_safe(nearest_node.point, new_point, obstacles_gcj, safe_radius_m, flight_height):
-            new_node = RRTNode(new_point)
-            new_node.parent = nearest_node
-            node_list.append(new_node)
-
-            # 5. 检查是否到达终点附近
-            if distance(new_point, end) < step_size:
-                if is_path_safe(new_point, end, obstacles_gcj, safe_radius_m, flight_height):
-                    end_node.parent = new_node
-                    node_list.append(end_node)
-                    # 回溯路径
-                    path = []
-                    current_node = end_node
-                    while current_node is not None:
-                        path.append(current_node.point)
-                        current_node = current_node.parent
-                    path.reverse()
-                    
-                    # 路径简化（去除冗余点）
-                    if len(path) > 2:
-                        simplified_path = [path[0]]
-                        for i in range(1, len(path)-1):
-                            prev = simplified_path[-1]
-                            curr = path[i]
-                            nxt = path[i+1]
-                            # 检查是否可以直接从 prev 到 nxt
-                            if not is_path_safe(prev, nxt, obstacles_gcj, safe_radius_m, flight_height):
-                                simplified_path.append(curr)
-                        simplified_path.append(path[-1])
-                        return simplified_path
-                    return path
-
-    # 如果迭代完还没找到，返回直线路径（理论上不应发生）
+def a_star_escape(start, end, obstacles_gcj, safe_radius_m, flight_height):
+    # 候选点
+    points = [tuple(start), tuple(end)]
+    points.extend(generate_candidate_points(obstacles_gcj, safe_radius_m, flight_height))
+    # 去重
+    unique = []
+    for p in points:
+        if not any(abs(p[0]-u[0])<1e-6 and abs(p[1]-u[1])<1e-6 for u in unique):
+            unique.append(p)
+    n = len(unique)
+    # 构建图
+    graph = {}
+    for i in range(n):
+        graph[i] = []
+        for j in range(n):
+            if i == j:
+                continue
+            if is_path_safe(unique[i], unique[j], obstacles_gcj, safe_radius_m, flight_height):
+                graph[i].append((j, distance(unique[i], unique[j])))
+    # 找索引
+    try:
+        start_idx = next(i for i,p in enumerate(unique) if abs(p[0]-start[0])<1e-6 and abs(p[1]-start[1])<1e-6)
+        end_idx = next(i for i,p in enumerate(unique) if abs(p[0]-end[0])<1e-6 and abs(p[1]-end[1])<1e-6)
+    except StopIteration:
+        return [start, end]
+    # A*
+    import heapq
+    open_set = [(0, start_idx)]
+    came_from = {}
+    g_score = {i: float('inf') for i in range(n)}
+    g_score[start_idx] = 0
+    f_score = {i: float('inf') for i in range(n)}
+    f_score[start_idx] = distance(unique[start_idx], unique[end_idx])
+    while open_set:
+        current = heapq.heappop(open_set)[1]
+        if current == end_idx:
+            path = []
+            while current in came_from:
+                path.append(unique[current])
+                current = came_from[current]
+            path.append(unique[start_idx])
+            path.reverse()
+            if len(path) <= 2:
+                return path
+            simplified = [path[0]]
+            for i in range(1, len(path)-1):
+                prev = simplified[-1]
+                curr = path[i]
+                nxt = path[i+1]
+                angle1 = math.atan2(curr[1]-prev[1], curr[0]-prev[0])
+                angle2 = math.atan2(nxt[1]-curr[1], nxt[0]-curr[0])
+                if abs(angle1 - angle2) > 0.01:
+                    simplified.append(curr)
+            simplified.append(path[-1])
+            return simplified
+        for neighbor, dist in graph.get(current, []):
+            tentative = g_score[current] + dist
+            if tentative < g_score[neighbor]:
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative
+                f_score[neighbor] = tentative + distance(unique[neighbor], unique[end_idx])
+                heapq.heappush(open_set, (f_score[neighbor], neighbor))
+    # 失败返回直线（理论上不应发生）
     return [start, end]
 
 def create_avoidance_path(start, end, obstacles_gcj, flight_height, safe_radius_m, strategy):
     if is_path_safe(start, end, obstacles_gcj, safe_radius_m, flight_height):
         return [start, end]
-    # 直线不安全，使用 RRT 绕行
-    return rrt_path_planning(start, end, obstacles_gcj, safe_radius_m, flight_height)
-# ==================== 修改结束 ====================
+    # 直线不安全，使用 A* 绕行
+    return a_star_escape(start, end, obstacles_gcj, safe_radius_m, flight_height)
 
 # ==================== 障碍物缓存 ====================
 def save_obstacles_to_cache():
@@ -347,7 +366,7 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history, p
 
 # ==================== 主程序 ====================
 def main():
-    st.title("🏫 无人机地面站系统 - RRT可靠绕行")
+    st.title("🏫 无人机地面站系统 - 最终可靠绕行")
     st.markdown("---")
     
     # 初始化状态
@@ -389,8 +408,8 @@ def main():
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔄 绕行策略")
-    strategy = st.sidebar.selectbox("选择避障方式", ["RRT 随机树", "最佳航线 (A*)", "向左绕行", "向右绕行"], index=0)
-    # 注意：向左/向右暂未实现方向偏好，统一使用 RRT，但为了满足界面选项，保留。
+    strategy = st.sidebar.selectbox("选择避障方式", ["最佳航线 (A*)", "向左绕行", "向右绕行"], index=0)
+    # 注意：向左/向右暂未实现方向偏好，统一使用 A*，但为了满足界面选项，保留。
     
     st.sidebar.markdown("---")
     obs_count = len(st.session_state.obstacles_gcj)
@@ -412,7 +431,7 @@ def main():
     
     # 航线规划页面
     if page == "🗺️ 航线规划":
-        st.header("🗺️ 航线规划 - RRT 强制绕行")
+        st.header("🗺️ 航线规划 - 强制绕行")
         if not straight_safe:
             st.warning(f"⚠️ 直线航线被需要避让的建筑物阻挡！已自动规划避障航线（绿色）")
         else:
