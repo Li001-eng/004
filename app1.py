@@ -140,7 +140,7 @@ def plan_path(A,B,obs,h,rad,strat):
             return left if len_left <= len_right else right
         return left or right or [A,B]
 
-# 心跳模拟器（扩展已用时间、延迟、丢包率）
+# 心跳模拟器（扩展）
 class Heartbeat:
     def __init__(self,start):
         self.hist = []
@@ -170,7 +170,8 @@ class Heartbeat:
         self.start_time = time.time()
         self.elapsed = 0
     def reset(self):
-        self.pos = self.path[0][:] if self.path else self.pos
+        if self.path:
+            self.pos = self.path[0][:]
         self.idx = 0
         self.sim = False
         self.pause = False
@@ -214,7 +215,6 @@ class Heartbeat:
         battery = max(0,100-int(self.prog*100))
         remain_dist = max(0,self.total-self.trav)
         remain_sec = remain_dist/(speed+0.01)/111000*3600 if speed>0 else 0
-        # 模拟延迟和丢包率（随进度变化）
         delay = round(random.uniform(10, 50), 1) if self.sim else 0
         loss = round(random.uniform(0, 0.2), 1) if self.sim else 0
         return {
@@ -281,7 +281,7 @@ def make_map(center, points, obs, hist, path, maptype, blocked, rad, h):
 
 # 主程序
 def main():
-    # 初始化状态
+    # 初始化
     if 'points' not in st.session_state: st.session_state.points = {'A':A_DFT[:],'B':B_DFT[:]}
     if 'obs' not in st.session_state: st.session_state.obs = []
     if 'hb' not in st.session_state: st.session_state.hb = Heartbeat(st.session_state.points['A'][:])
@@ -402,13 +402,12 @@ def main():
 
     elif page == "监控":
         st.header("飞行实时画面 - 任务执行监控")
-        # 控制按钮行
         col_btn = st.columns(4)
         with col_btn[0]:
             if st.button("▶️ 开始任务", use_container_width=True):
                 if not st.session_state.running:
-                    p = st.session_state.path or [st.session_state.points['A'],st.session_state.points['B']]
-                    st.session_state.hb.set_path(p,st.session_state.alt,st.session_state.drone_spd)
+                    p = st.session_state.path or [st.session_state.points['A'], st.session_state.points['B']]
+                    st.session_state.hb.set_path(p, st.session_state.alt, st.session_state.drone_spd)
                     st.session_state.running = True
                     st.rerun()
                 else:
@@ -430,37 +429,37 @@ def main():
                 st.session_state.hist = []
                 st.rerun()
         st.markdown("---")
-        # 指标区域
-        if st.session_state.running and time.time()-st.session_state.last_time>=0.2:
+        # 实时数据更新
+        if st.session_state.running and time.time() - st.session_state.last_time >= 0.2:
             hb = st.session_state.hb.update()
             st.session_state.last_time = time.time()
-            st.session_state.hist.append([hb['lng'],hb['lat']])
-            if len(st.session_state.hist)>200: st.session_state.hist.pop(0)
-            if not st.session_state.hb.sim: st.session_state.running = False
+            st.session_state.hist.append([hb['lng'], hb['lat']])
+            if len(st.session_state.hist) > 200:
+                st.session_state.hist.pop(0)
+            if not st.session_state.hb.sim:
+                st.session_state.running = False
             st.rerun()
+        # 指标显示
         if st.session_state.hb.hist:
             d = st.session_state.hb.hist[0]
-            # 第一行4个指标
             row1 = st.columns(4)
-            row1[0].metric("当前航点", d.get('current_wp','0/0'))
-            row1[1].metric("飞行速度", f"{d.get('speed',0)} m/s")
-            elapsed = d.get('elapsed',0)
-            elapsed_str = f"{int(elapsed//60):02d}:{int(elapsed%60):02d}"
+            row1[0].metric("当前航点", d.get('current_wp', '0/0'))
+            row1[1].metric("飞行速度", f"{d.get('speed', 0)} m/s")
+            elapsed = d.get('elapsed', 0)
+            elapsed_str = f"{int(elapsed // 60):02d}:{int(elapsed % 60):02d}"
             row1[2].metric("已用时间", elapsed_str)
-            remaining = max(0, (d.get('total',0)-d.get('traveled',0))*111000)
+            remaining = max(0, (d.get('total', 0) - d.get('traveled', 0)) * 111000)
             row1[3].metric("剩余距离", f"{remaining:.0f} m")
-            # 第二行2个指标
             row2 = st.columns(2)
-            row2[0].metric("预计到达", d.get('remain','00:00'))
-            row2[1].metric("电量模拟", f"{d.get('battery',0)}%")
-            # 任务进度条
-            progress = d.get('progress',0)
-            st.progress(progress, text=f"任务进度: {progress*100:.1f}%")
+            row2[0].metric("预计到达", d.get('remain', '00:00'))
+            row2[1].metric("电量模拟", f"{d.get('battery', 0)}%")
+            progress = d.get('progress', 0)
+            st.progress(progress, text=f"任务进度: {progress * 100:.1f}%")
         else:
             st.info("等待飞行任务开始...")
             st.progress(0, text="任务进度: 0%")
         st.markdown("---")
-        # 设备状态与通信拓扑
+        # 设备状态和拓扑
         col_status, col_top = st.columns(2)
         with col_status:
             st.subheader("📡 设备状态")
@@ -470,7 +469,6 @@ def main():
             st.markdown(f"- **FCU**：{'✅ 在线' if online else '❌ 离线'}")
         with col_top:
             st.subheader("🔗 通信链路拓扑与数据流")
-            # 获取模拟的延迟和丢包率
             if st.session_state.hb.hist:
                 d = st.session_state.hb.hist[0]
                 delay = d.get('delay_ms', 0)
@@ -480,34 +478,47 @@ def main():
                 loss = 0
             st.markdown(f"""
             - **GCS** ↔ **OBC**：延迟 {delay} ms  
-            - **GCS** ↔ **FCU**：延迟 {delay+5} ms  
-            - **OBC** ↔ **FCU**：延迟 ~{max(0,delay-2)} ms  
+            - **GCS** ↔ **FCU**：延迟 {delay + 5} ms  
+            - **OBC** ↔ **FCU**：延迟 ~{max(0, delay - 2)} ms  
             - **丢包率**：{loss}%
             """)
             st.code("GCS → OBC → FCU → UAV")
             st.caption("数据流：遥控指令 → 飞控 → 执行器 | 遥测数据 ← 飞控 ← 传感器")
         st.markdown("---")
-        # 实时飞行地图
+        # 实时飞行地图（始终显示）
         st.subheader("🗺️ 实时飞行地图")
+        # 确定地图中心
         if st.session_state.hb.hist:
             d = st.session_state.hb.hist[0]
-            tiles = SAT_URL if map_type=="satellite" else VEC_URL
-            m = folium.Map(location=[d['lat'],d['lng']], zoom_start=17, tiles=tiles, attr=ATTR)
-            add_safety(m, st.session_state.obs, st.session_state.safe_rad, st.session_state.alt)
-            for o in st.session_state.obs:
-                coords=o.get('polygon',[])
-                if len(coords)>=3:
-                    folium.Polygon([[c[1],c[0]] for c in coords], color='red', fill=True, fill_opacity=0.3).add_to(m)
-            if st.session_state.path:
-                folium.PolyLine([[p[1],p[0]] for p in st.session_state.path], color='green', weight=3).add_to(m)
-            trail = [[h['lat'],h['lng']] for h in st.session_state.hb.hist[:30] if 'lat' in h]
-            if len(trail)>1: folium.PolyLine(trail, color='orange', weight=2).add_to(m)
-            folium.Marker([d['lat'],d['lng']], popup=f"当前位置\n高度:{d['altitude']}m", icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(m)
-            if st.session_state.points['A']: folium.Marker([st.session_state.points['A'][1],st.session_state.points['A'][0]], popup="起点", icon=folium.Icon(color='green')).add_to(m)
-            if st.session_state.points['B']: folium.Marker([st.session_state.points['B'][1],st.session_state.points['B'][0]], popup="终点", icon=folium.Icon(color='red')).add_to(m)
-            folium_static(m, width=1000, height=500)
+            center_lat, center_lng = d['lat'], d['lng']
+        elif st.session_state.points.get('A'):
+            center_lng, center_lat = st.session_state.points['A'][0], st.session_state.points['A'][1]
         else:
-            st.info("等待飞行任务开始...")
+            center_lat, center_lng = SCHOOL_CENTER[1], SCHOOL_CENTER[0]
+        tiles = SAT_URL if map_type == "satellite" else VEC_URL
+        m = folium.Map(location=[center_lat, center_lng], zoom_start=17, tiles=tiles, attr=ATTR)
+        add_safety(m, st.session_state.obs, st.session_state.safe_rad, st.session_state.alt)
+        for o in st.session_state.obs:
+            coords = o.get('polygon', [])
+            if len(coords) >= 3:
+                folium.Polygon([[c[1], c[0]] for c in coords], color='red', fill=True, fill_opacity=0.3).add_to(m)
+        if st.session_state.path:
+            folium.PolyLine([[p[1], p[0]] for p in st.session_state.path], color='green', weight=3).add_to(m)
+        if st.session_state.hb.hist:
+            trail = [[h['lat'], h['lng']] for h in st.session_state.hb.hist[:30] if 'lat' in h]
+            if len(trail) > 1:
+                folium.PolyLine(trail, color='orange', weight=2).add_to(m)
+            d = st.session_state.hb.hist[0]
+            folium.Marker([d['lat'], d['lng']], popup=f"📍 当前位置\n高度:{d['altitude']}m",
+                          icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(m)
+        # 添加起点终点标记
+        if st.session_state.points.get('A'):
+            folium.Marker([st.session_state.points['A'][1], st.session_state.points['A'][0]], popup="起点",
+                          icon=folium.Icon(color='green')).add_to(m)
+        if st.session_state.points.get('B'):
+            folium.Marker([st.session_state.points['B'][1], st.session_state.points['B'][0]], popup="终点",
+                          icon=folium.Icon(color='red')).add_to(m)
+        folium_static(m, width=1000, height=500)
 
     elif page == "障碍物":
         st.header("障碍物管理")
