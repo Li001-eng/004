@@ -12,7 +12,7 @@ import pandas as pd
 import copy
 
 # ==================== 页面配置 ====================
-st.set_page_config(page_title="无人机地面站系统 - 简化绕行", layout="wide")
+st.set_page_config(page_title="无人机地面站系统 - 平行偏移绕行", layout="wide")
 
 # ==================== 坐标 ====================
 SCHOOL_CENTER_GCJ = [118.7490, 32.2340]
@@ -120,22 +120,18 @@ def is_path_blocked(p1, p2, obstacles_gcj, flight_height, safe_radius):
                     return True
     return False
 
-# ==================== 简化绕行方法：中点偏移 ====================
-def generate_midpoint_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, side='left'):
+# ==================== 平行偏移绕行（新方法） ====================
+def generate_parallel_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, side='left'):
     """
-    在起点到终点的中点垂直偏移，生成绕行路径。
+    在起点到终点连线的垂直方向生成平行偏移线，选择第一条无阻挡的直线路径。
     side: 'left' 或 'right'
     """
-    # 计算中点
-    mid_x = (start[0] + end[0]) / 2
-    mid_y = (start[1] + end[1]) / 2
-    # 方向向量
     dx = end[0] - start[0]
     dy = end[1] - start[1]
     length = math.hypot(dx, dy)
     if length == 0:
         return None
-    # 单位方向
+    # 单位方向向量
     ux = dx / length
     uy = dy / length
     # 垂直单位向量（左转为正）
@@ -145,18 +141,17 @@ def generate_midpoint_offset_path(start, end, obstacles_gcj, flight_height, safe
         perp_x = uy
         perp_y = -ux
     
-    # 偏移步长（米转度），初始为安全半径的2倍
+    # 偏移距离（米转度）
     offset_m = safe_radius * 2.0
     offset_deg = offset_m / 111000.0
     
-    max_attempts = 15
+    max_attempts = 12  # 尝试12条线，覆盖足够远的距离
     for attempt in range(1, max_attempts + 1):
         offset = offset_deg * attempt
-        waypoint = [mid_x + perp_x * offset, mid_y + perp_y * offset]
-        # 检查路径是否畅通
-        if not is_path_blocked(start, waypoint, obstacles_gcj, flight_height, safe_radius) and \
-           not is_path_blocked(waypoint, end, obstacles_gcj, flight_height, safe_radius):
-            return [start, waypoint, end]
+        p1 = [start[0] + perp_x * offset, start[1] + perp_y * offset]
+        p2 = [end[0] + perp_x * offset, end[1] + perp_y * offset]
+        if not is_path_blocked(p1, p2, obstacles_gcj, flight_height, safe_radius):
+            return [p1, p2]
     return None
 
 # ==================== A* 路径规划（备用） ====================
@@ -226,23 +221,23 @@ def create_avoidance_path(start, end, obstacles_gcj, flight_height, safe_radius,
     if not is_path_blocked(start, end, obstacles_gcj, flight_height, safe_radius):
         return [start, end]
     if strategy == 'left':
-        path = generate_midpoint_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, 'left')
+        path = generate_parallel_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, 'left')
         if path:
             return path
         # 左侧失败，尝试右侧
-        path = generate_midpoint_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, 'right')
+        path = generate_parallel_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, 'right')
         if path:
             return path
         return astar_path(start, end, obstacles_gcj, flight_height, safe_radius)
     elif strategy == 'right':
-        path = generate_midpoint_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, 'right')
+        path = generate_parallel_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, 'right')
         if path:
             return path
-        path = generate_midpoint_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, 'left')
+        path = generate_parallel_offset_path(start, end, obstacles_gcj, flight_height, safe_radius, 'left')
         if path:
             return path
         return astar_path(start, end, obstacles_gcj, flight_height, safe_radius)
-    else:  # best (A*)
+    else:
         return astar_path(start, end, obstacles_gcj, flight_height, safe_radius)
 
 # ==================== 障碍物管理（内存缓存） ====================
@@ -370,7 +365,7 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
 
 # ==================== 主程序 ====================
 def main():
-    st.title("🏫 无人机地面站系统 - 简化绕行（中点偏移）")
+    st.title("🏫 无人机地面站系统 - 平行偏移绕行")
     st.markdown("---")
     
     # 初始化状态
