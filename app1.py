@@ -69,7 +69,6 @@ def line_cross_poly(p1,p2,poly):
     return False
 
 def seg_to_poly_dist(p1, p2, poly):
-    # 近似最小距离（米）
     min_d = float('inf')
     for pt in poly:
         t = ((pt[0]-p1[0])*(p2[0]-p1[0]) + (pt[1]-p1[1])*(p2[1]-p1[1])) / (dist(p1,p2)**2+1e-9)
@@ -81,7 +80,7 @@ def seg_to_poly_dist(p1, p2, poly):
         p3,p4 = poly[i], poly[(i+1)%len(poly)]
         for t in range(11):
             pt = (p3[0]+(p4[0]-p3[0])*t/10, p3[1]+(p4[1]-p3[1])*t/10)
-            d = dist(pt, (p1[0],p1[1]))  # 简化，实际要投影到线段，这里粗略
+            d = dist(pt, (p1[0],p1[1]))
             if d < min_d: min_d = d
     return min_d * 111000
 
@@ -114,7 +113,6 @@ def gen_bypass(A,B,obs,rad_m,h,side='left'):
         wp = (mx+px*off_deg, my+py*off_deg)
         if path_safe(A,wp,avoid,rad_m,h) and path_safe(wp,B,avoid,rad_m,h):
             return [A,wp,B]
-    # 若失败，取所有障碍物外一点
     pts = [p for o in avoid for p in o.get('polygon',[])]
     if pts:
         cx = sum(p[0] for p in pts)/len(pts); cy = sum(p[1] for p in pts)/len(pts)
@@ -133,13 +131,14 @@ def plan_path(A,B,obs,h,rad,strat):
     if straight: return [A,B]
     if strat in ('left','right'):
         return gen_bypass(A,B,obs,rad,h,strat)
-    else:  # best: 尝试左右取短
-        left=gen_bypass(A,B,obs,rad,h,'left'); right=gen_bypass(A,B,obs,rad,h,'right')
+    else:
+        left=gen_bypass(A,B,obs,rad,h,'left')
+        right=gen_bypass(A,B,obs,rad,h,'right')
         if left and right:
             return left if sum(dist(left[i],left[i+1]) for i in range(len(left)-1)) <= sum(dist(right[i],right[i+1]) for i in range(len(right)-1)) else right
         return left or right or [A,B]
 
-# 心跳模拟器（简化）
+# 心跳模拟器
 class Heartbeat:
     def __init__(self,start): self.hist=[]; self.pos=start[:]; self.path=[start[:]]; self.idx=0; self.sim=False; self.pause=False; self.alt=50; self.spd=50; self.prog=0; self.total=0; self.trav=0; self.start_t=None
     def set_path(self,path,alt,spd): self.path=path; self.idx=0; self.pos=path[0][:]; self.alt=alt; self.spd=spd; self.sim=True; self.pause=False; self.prog=0; self.trav=0; self.total=sum(dist(path[i],path[i+1]) for i in range(len(path)-1)); self.start_t=time.time()
@@ -335,7 +334,8 @@ def main():
             cols = st.columns(5)
             cols[0].metric("当前航点", d.get('current_wp','0/0'))
             cols[1].metric("飞行速度", f"{d.get('speed',0)} m/s")
-            cols[2].metric("剩余距离", f"{max(0,(d.get('total',0)-d.get('traveled',0))*111000:.0f} m")
+            remaining = max(0, (d.get('total',0)-d.get('traveled',0))*111000)
+            cols[2].metric("剩余距离", f"{remaining:.0f} m")
             cols[3].metric("预计到达", d.get('remain','00:00'))
             cols[4].metric("电量模拟", f"{d.get('battery',0)}%")
             st.progress(d.get('progress',0), text=f"任务进度: {d.get('progress',0)*100:.1f}%")
