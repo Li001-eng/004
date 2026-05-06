@@ -15,6 +15,8 @@ A_DFT = [118.746956, 32.232945]
 B_DFT = [118.751589, 32.235204]
 SAT_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
 VEC_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
+SAT_ATTR = "高德卫星地图"
+VEC_ATTR = "高德矢量地图"
 
 # 坐标转换（精简版）
 def gcj2wgs(lng, lat):
@@ -95,7 +97,7 @@ def path_safe(p1,p2,obs,rad_m,h):
         if seg_to_poly_dist(p1,p2,poly) < rad_m-0.1: return False
     return True
 
-# 绕行生成（中点偏移暴力尝试）
+# 绕行生成
 def gen_bypass(A,B,obs,rad_m,h,side='left'):
     avoid = [o for o in obs if should_avoid(o,h)]
     if not avoid: return [A,B]
@@ -195,10 +197,15 @@ def add_safety(m, obs, rad, h):
             for pt in o.get('polygon',[]):
                 folium.Circle([pt[1],pt[0]], rad, color='orange', fill=True, fill_opacity=0.2).add_to(m)
 
-# 地图生成
+# 地图生成（添加 attr）
 def make_map(center, points, obs, hist, path, maptype, blocked, rad, h):
-    tiles = SAT_URL if maptype=='satellite' else VEC_URL
-    m = folium.Map(location=[center[1],center[0]], zoom_start=16, tiles=tiles)
+    if maptype == 'satellite':
+        tiles = SAT_URL
+        attr = SAT_ATTR
+    else:
+        tiles = VEC_URL
+        attr = VEC_ATTR
+    m = folium.Map(location=[center[1],center[0]], zoom_start=16, tiles=tiles, attr=attr)
     Draw(export=True, draw_options={'polygon':{'allowIntersection':False,'showArea':True}}).add_to(m)
     add_safety(m, obs, rad, h)
     for i,o in enumerate(obs):
@@ -356,7 +363,8 @@ def main():
         if st.session_state.hb.hist:
             d = st.session_state.hb.hist[0]
             tiles = SAT_URL if map_type=="satellite" else VEC_URL
-            m = folium.Map(location=[d['lat'],d['lng']], zoom_start=17, tiles=tiles)
+            attr = SAT_ATTR if map_type=="satellite" else VEC_ATTR
+            m = folium.Map(location=[d['lat'],d['lng']], zoom_start=17, tiles=tiles, attr=attr)
             add_safety(m, st.session_state.obs, safe_rad, st.session_state.alt)
             for o in st.session_state.obs:
                 coords=o.get('polygon',[])
@@ -394,7 +402,8 @@ def main():
             if st.button("🗑️ 全部清除"): st.session_state.obs=[]; st.session_state.path=plan_path(st.session_state.points['A'],st.session_state.points['B'],[],st.session_state.alt,safe_rad,sel_strat); st.rerun()
         with col2:
             tiles = SAT_URL if map_type=="satellite" else VEC_URL
-            m = folium.Map(location=[SCHOOL_CENTER[1],SCHOOL_CENTER[0]], zoom_start=16, tiles=tiles)
+            attr = SAT_ATTR if map_type=="satellite" else VEC_ATTR
+            m = folium.Map(location=[SCHOOL_CENTER[1],SCHOOL_CENTER[0]], zoom_start=16, tiles=tiles, attr=attr)
             for o in st.session_state.obs:
                 coords=o.get('polygon',[])
                 if len(coords)>=3:
