@@ -12,7 +12,6 @@ st.title("🏫 无人机地面站系统")
 SCHOOL_CENTER = [118.7490, 32.2340]
 A_DFT = [118.746956, 32.232945]
 B_DFT = [118.751589, 32.235204]
-# 高德地图瓦片（必须添加 attribution）
 SAT_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
 VEC_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
 ATTR = "高德地图"
@@ -141,15 +140,52 @@ def plan_path(A,B,obs,h,rad,strat):
             return left if len_left <= len_right else right
         return left or right or [A,B]
 
-# 心跳模拟器
+# 心跳模拟器（扩展已用时间、延迟、丢包率）
 class Heartbeat:
-    def __init__(self,start): self.hist=[]; self.pos=start[:]; self.path=[start[:]]; self.idx=0; self.sim=False; self.pause=False; self.alt=50; self.spd=50; self.prog=0; self.total=0; self.trav=0
-    def set_path(self,path,alt,spd): self.path=path; self.idx=0; self.pos=path[0][:]; self.alt=alt; self.spd=spd; self.sim=True; self.pause=False; self.prog=0; self.trav=0; self.total=sum(dist(path[i],path[i+1]) for i in range(len(path)-1))
-    def pause(self): self.pause=True
-    def resume(self): self.pause=False
-    def stop(self): self.sim=False; self.pause=False
+    def __init__(self,start):
+        self.hist = []
+        self.pos = start[:]
+        self.path = [start[:]]
+        self.idx = 0
+        self.sim = False
+        self.pause = False
+        self.alt = 50
+        self.spd = 50
+        self.prog = 0
+        self.total = 0
+        self.trav = 0
+        self.start_time = None
+        self.elapsed = 0
+    def set_path(self,path,alt,spd):
+        self.path = path
+        self.idx = 0
+        self.pos = path[0][:]
+        self.alt = alt
+        self.spd = spd
+        self.sim = True
+        self.pause = False
+        self.prog = 0
+        self.trav = 0
+        self.total = sum(dist(path[i],path[i+1]) for i in range(len(path)-1))
+        self.start_time = time.time()
+        self.elapsed = 0
+    def reset(self):
+        self.pos = self.path[0][:] if self.path else self.pos
+        self.idx = 0
+        self.sim = False
+        self.pause = False
+        self.prog = 0
+        self.trav = 0
+        self.start_time = None
+        self.elapsed = 0
+    def pause(self): self.pause = True
+    def resume(self): self.pause = False
+    def stop(self): self.sim = False; self.pause = False; self.start_time = None
     def update(self):
-        if not self.sim or self.pause: return self._hb()
+        if not self.sim or self.pause:
+            return self._hb()
+        if self.start_time:
+            self.elapsed = time.time() - self.start_time
         if self.idx < len(self.path)-1:
             tar = self.path[self.idx+1]
             dx,dy = tar[0]-self.pos[0], tar[1]-self.pos[1]
@@ -158,25 +194,46 @@ class Heartbeat:
             step_deg = step_m/111000
             if d2t < step_deg:
                 self.trav += d2t
-                self.pos = tar[:]; self.idx+=1
+                self.pos = tar[:]
+                self.idx += 1
             else:
                 r = step_deg/d2t
-                self.pos[0] += dx*r; self.pos[1] += dy*r
+                self.pos[0] += dx*r
+                self.pos[1] += dy*r
                 self.trav += step_deg
             if self.total>0: self.prog = min(1, self.trav/self.total)
-            if self.idx>=len(self.path)-1: self.sim=False; self.prog=1
-        else: self.sim=False; self.prog=1
+            if self.idx >= len(self.path)-1:
+                self.sim = False
+                self.prog = 1
+        else:
+            self.sim = False
+            self.prog = 1
         return self._hb()
     def _hb(self):
         speed = round(0.5+self.spd/100*4.5,1) if self.sim and not self.pause else 0
         battery = max(0,100-int(self.prog*100))
         remain_dist = max(0,self.total-self.trav)
         remain_sec = remain_dist/(speed+0.01)/111000*3600 if speed>0 else 0
-        return {"timestamp":datetime.now().strftime("%H:%M:%S"), "lng":self.pos[0], "lat":self.pos[1],
-                "altitude":self.alt+random.randint(-5,5) if self.sim else random.randint(0,10),
-                "speed":speed, "progress":self.prog, "total":self.total, "traveled":self.trav,
-                "current_wp":f"{self.idx+1}/{len(self.path)}", "remain":f"{int(remain_sec//60):02d}:{int(remain_sec%60):02d}",
-                "battery":battery, "simulating":self.sim, "paused":self.pause}
+        # 模拟延迟和丢包率（随进度变化）
+        delay = round(random.uniform(10, 50), 1) if self.sim else 0
+        loss = round(random.uniform(0, 0.2), 1) if self.sim else 0
+        return {
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "lng": self.pos[0], "lat": self.pos[1],
+            "altitude": self.alt+random.randint(-5,5) if self.sim else random.randint(0,10),
+            "speed": speed,
+            "progress": self.prog,
+            "total": self.total,
+            "traveled": self.trav,
+            "current_wp": f"{self.idx+1}/{len(self.path)}",
+            "remain": f"{int(remain_sec//60):02d}:{int(remain_sec%60):02d}",
+            "battery": battery,
+            "elapsed": self.elapsed,
+            "delay_ms": delay,
+            "loss_percent": loss,
+            "simulating": self.sim,
+            "paused": self.pause
+        }
 
 # 障碍物缓存
 def save_cache():
@@ -198,7 +255,7 @@ def add_safety(m, obs, rad, h):
             for pt in o.get('polygon',[]):
                 folium.Circle([pt[1],pt[0]], rad, color='orange', fill=True, fill_opacity=0.2, popup=f"安全区{rad}m").add_to(m)
 
-# 地图生成（添加 attribution）
+# 地图生成
 def make_map(center, points, obs, hist, path, maptype, blocked, rad, h):
     tiles = SAT_URL if maptype=='satellite' else VEC_URL
     m = folium.Map(location=[center[1],center[0]], zoom_start=16, tiles=tiles, attr=ATTR)
@@ -277,7 +334,7 @@ def main():
             a_lat = st.number_input("纬度", value=st.session_state.points['A'][1], format="%.6f")
             a_lng = st.number_input("经度", value=st.session_state.points['A'][0], format="%.6f")
             if st.button("设置A点"):
-                st.session_state.points['A']=[a_lng,a_lat]
+                st.session_state.points['A'] = [a_lng,a_lat]
                 st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],
                                                   st.session_state.obs,st.session_state.alt,
                                                   st.session_state.safe_rad,st.session_state.sel_strat)
@@ -286,7 +343,7 @@ def main():
             b_lat = st.number_input("纬度", value=st.session_state.points['B'][1], format="%.6f", key="b_lat")
             b_lng = st.number_input("经度", value=st.session_state.points['B'][0], format="%.6f", key="b_lng")
             if st.button("设置B点"):
-                st.session_state.points['B']=[b_lng,b_lat]
+                st.session_state.points['B'] = [b_lng,b_lat]
                 st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],
                                                   st.session_state.obs,st.session_state.alt,
                                                   st.session_state.safe_rad,st.session_state.sel_strat)
@@ -318,7 +375,7 @@ def main():
                 st.session_state.hist = []
                 st.success("飞行开始，请切换至「监控」页面")
             if st.button("⏹️ 停止飞行"):
-                st.session_state.running=False
+                st.session_state.running = False
                 st.session_state.hb.stop()
             st.caption(f"A:{st.session_state.points['A']}\nB:{st.session_state.points['B']}")
             if st.session_state.path and len(st.session_state.path)>2:
@@ -345,54 +402,92 @@ def main():
 
     elif page == "监控":
         st.header("飞行实时画面 - 任务执行监控")
-        c1,c2,c3 = st.columns(3)
-        if c1.button("▶️ 开始任务"):
-            if not st.session_state.running:
-                p = st.session_state.path or [st.session_state.points['A'],st.session_state.points['B']]
-                st.session_state.hb.set_path(p,st.session_state.alt,st.session_state.drone_spd)
-                st.session_state.running = True
+        # 控制按钮行
+        col_btn = st.columns(4)
+        with col_btn[0]:
+            if st.button("▶️ 开始任务", use_container_width=True):
+                if not st.session_state.running:
+                    p = st.session_state.path or [st.session_state.points['A'],st.session_state.points['B']]
+                    st.session_state.hb.set_path(p,st.session_state.alt,st.session_state.drone_spd)
+                    st.session_state.running = True
+                    st.rerun()
+                else:
+                    st.session_state.hb.resume()
+                    st.rerun()
+        with col_btn[1]:
+            if st.button("⏸️ 暂停", use_container_width=True):
+                st.session_state.hb.pause()
                 st.rerun()
-            else:
-                st.session_state.hb.resume()
+        with col_btn[2]:
+            if st.button("⏹️ 停止", use_container_width=True):
+                st.session_state.running = False
+                st.session_state.hb.stop()
                 st.rerun()
-        if c2.button("⏸️ 暂停"):
-            st.session_state.hb.pause()
-            st.rerun()
-        if c3.button("⏹️ 停止"):
-            st.session_state.running=False
-            st.session_state.hb.stop()
-            st.rerun()
+        with col_btn[3]:
+            if st.button("🔄 重置", use_container_width=True):
+                st.session_state.running = False
+                st.session_state.hb.reset()
+                st.session_state.hist = []
+                st.rerun()
         st.markdown("---")
+        # 指标区域
         if st.session_state.running and time.time()-st.session_state.last_time>=0.2:
             hb = st.session_state.hb.update()
             st.session_state.last_time = time.time()
             st.session_state.hist.append([hb['lng'],hb['lat']])
             if len(st.session_state.hist)>200: st.session_state.hist.pop(0)
-            if not st.session_state.hb.sim: st.session_state.running=False
+            if not st.session_state.hb.sim: st.session_state.running = False
             st.rerun()
         if st.session_state.hb.hist:
             d = st.session_state.hb.hist[0]
-            cols = st.columns(5)
-            cols[0].metric("当前航点", d.get('current_wp','0/0'))
-            cols[1].metric("飞行速度", f"{d.get('speed',0)} m/s")
+            # 第一行4个指标
+            row1 = st.columns(4)
+            row1[0].metric("当前航点", d.get('current_wp','0/0'))
+            row1[1].metric("飞行速度", f"{d.get('speed',0)} m/s")
+            elapsed = d.get('elapsed',0)
+            elapsed_str = f"{int(elapsed//60):02d}:{int(elapsed%60):02d}"
+            row1[2].metric("已用时间", elapsed_str)
             remaining = max(0, (d.get('total',0)-d.get('traveled',0))*111000)
-            cols[2].metric("剩余距离", f"{remaining:.0f} m")
-            cols[3].metric("预计到达", d.get('remain','00:00'))
-            cols[4].metric("电量模拟", f"{d.get('battery',0)}%")
-            st.progress(d.get('progress',0), text=f"任务进度: {d.get('progress',0)*100:.1f}%")
+            row1[3].metric("剩余距离", f"{remaining:.0f} m")
+            # 第二行2个指标
+            row2 = st.columns(2)
+            row2[0].metric("预计到达", d.get('remain','00:00'))
+            row2[1].metric("电量模拟", f"{d.get('battery',0)}%")
+            # 任务进度条
+            progress = d.get('progress',0)
+            st.progress(progress, text=f"任务进度: {progress*100:.1f}%")
         else:
+            st.info("等待飞行任务开始...")
             st.progress(0, text="任务进度: 0%")
         st.markdown("---")
+        # 设备状态与通信拓扑
         col_status, col_top = st.columns(2)
         with col_status:
             st.subheader("📡 设备状态")
             online = st.session_state.running
-            st.markdown(f"- GCS：✅ 在线\n- OBC：{'✅ 在线' if online else '❌ 离线'}\n- FCU：{'✅ 在线' if online else '❌ 离线'}")
+            st.markdown(f"- **GCS**：{'✅ 在线' if online else '❌ 离线'}")
+            st.markdown(f"- **OBC**：{'✅ 在线' if online else '❌ 离线'}")
+            st.markdown(f"- **FCU**：{'✅ 在线' if online else '❌ 离线'}")
         with col_top:
-            st.subheader("🔗 通信链路拓扑")
+            st.subheader("🔗 通信链路拓扑与数据流")
+            # 获取模拟的延迟和丢包率
+            if st.session_state.hb.hist:
+                d = st.session_state.hb.hist[0]
+                delay = d.get('delay_ms', 0)
+                loss = d.get('loss_percent', 0)
+            else:
+                delay = 0
+                loss = 0
+            st.markdown(f"""
+            - **GCS** ↔ **OBC**：延迟 {delay} ms  
+            - **GCS** ↔ **FCU**：延迟 {delay+5} ms  
+            - **OBC** ↔ **FCU**：延迟 ~{max(0,delay-2)} ms  
+            - **丢包率**：{loss}%
+            """)
             st.code("GCS → OBC → FCU → UAV")
-            st.caption("数据流：遥控指令 → 飞控 → 执行器")
+            st.caption("数据流：遥控指令 → 飞控 → 执行器 | 遥测数据 ← 飞控 ← 传感器")
         st.markdown("---")
+        # 实时飞行地图
         st.subheader("🗺️ 实时飞行地图")
         if st.session_state.hb.hist:
             d = st.session_state.hb.hist[0]
