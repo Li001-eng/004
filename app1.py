@@ -690,29 +690,29 @@ st.markdown("---")
 # 实时飞行地图
 st.subheader("🗺️ 实时飞行地图")
 if st.session_state.heartbeat_sim.history:
-latest = st.session_state.heartbeat_sim.history[0]
-tiles = GAODE_SATELLITE_URL if map_type == "satellite" else GAODE_VECTOR_URL
-monitor_map = folium.Map(location=[latest['lat'], latest['lng']], zoom_start=17, tiles=tiles, attr="高德地图")
-add_safety_buffer(monitor_map, st.session_state.obstacles_gcj, safe_radius, st.session_state.flight_altitude)
-for obs in st.session_state.obstacles_gcj:
-    coords = obs.get('polygon', [])
-    if coords and len(coords) >= 3:
-        popup_text = f"高度: {obs.get('height',20)}m"
-        folium.Polygon([[c[1], c[0]] for c in coords], color="red", weight=2, fill=True, fill_opacity=0.3, popup=popup_text).add_to(monitor_map)
-if st.session_state.planned_path and len(st.session_state.planned_path) > 1:
-    folium.PolyLine([[p[1], p[0]] for p in st.session_state.planned_path], color="green", weight=3, opacity=0.7, popup="避障航线").add_to(monitor_map)
-trail = [[hb['lat'], hb['lng']] for hb in st.session_state.heartbeat_sim.history[:30] if hb.get('lat') and hb.get('lng')]
-if len(trail) > 1:
-    folium.PolyLine(trail, color="orange", weight=2, opacity=0.7, popup="历史轨迹").add_to(monitor_map)
-folium.Marker([latest['lat'], latest['lng']], popup=f"📍 当前位置\n高度: {latest['altitude']}m\n速度: {latest.get('speed',0)} m/s", 
-             icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(monitor_map)
-if st.session_state.points_gcj['A']:
-    folium.Marker([st.session_state.points_gcj['A'][1], st.session_state.points_gcj['A'][0]], 
-                 popup="🟢 起点", icon=folium.Icon(color='green', icon='play', prefix='fa')).add_to(monitor_map)
-if st.session_state.points_gcj['B']:
-    folium.Marker([st.session_state.points_gcj['B'][1], st.session_state.points_gcj['B'][0]], 
-                 popup="🔴 终点", icon=folium.Icon(color='red', icon='stop', prefix='fa')).add_to(monitor_map)
-folium_static(monitor_map, width=1000, height=500)
+    latest = st.session_state.heartbeat_sim.history[0]
+    tiles = GAODE_SATELLITE_URL if map_type == "satellite" else GAODE_VECTOR_URL
+    monitor_map = folium.Map(location=[latest['lat'], latest['lng']], zoom_start=17, tiles=tiles, attr="高德地图")
+    add_safety_buffer(monitor_map, st.session_state.obstacles_gcj, safe_radius, st.session_state.flight_altitude)
+    for obs in st.session_state.obstacles_gcj:
+        coords = obs.get('polygon', [])
+        if coords and len(coords) >= 3:
+            popup_text = f"高度: {obs.get('height',20)}m"
+            folium.Polygon([[c[1], c[0]] for c in coords], color="red", weight=2, fill=True, fill_opacity=0.3, popup=popup_text).add_to(monitor_map)
+    if st.session_state.planned_path and len(st.session_state.planned_path) > 1:
+        folium.PolyLine([[p[1], p[0]] for p in st.session_state.planned_path], color="green", weight=3, opacity=0.7, popup="避障航线").add_to(monitor_map)
+    trail = [[hb['lat'], hb['lng']] for hb in st.session_state.heartbeat_sim.history[:30] if hb.get('lat') and hb.get('lng')]
+    if len(trail) > 1:
+        folium.PolyLine(trail, color="orange", weight=2, opacity=0.7, popup="历史轨迹").add_to(monitor_map)
+    folium.Marker([latest['lat'], latest['lng']], popup=f"📍 当前位置\n高度: {latest['altitude']}m\n速度: {latest.get('speed',0)} m/s", 
+                 icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(monitor_map)
+    if st.session_state.points_gcj['A']:
+        folium.Marker([st.session_state.points_gcj['A'][1], st.session_state.points_gcj['A'][0]], 
+                     popup="🟢 起点", icon=folium.Icon(color='green', icon='play', prefix='fa')).add_to(monitor_map)
+    if st.session_state.points_gcj['B']:
+        folium.Marker([st.session_state.points_gcj['B'][1], st.session_state.points_gcj['B'][0]], 
+                     popup="🔴 终点", icon=folium.Icon(color='red', icon='stop', prefix='fa')).add_to(monitor_map)
+    folium_static(monitor_map, width=1000, height=500)
 else:
 st.info("⏳ 等待飞行任务开始... 请在「航线规划」页面规划路径并点击「开始飞行」")
 
