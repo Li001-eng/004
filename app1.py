@@ -4,7 +4,6 @@ from streamlit_folium import st_folium, folium_static
 from folium.plugins import Draw
 import random, time, math, copy
 from datetime import datetime
-import pandas as pd
 
 st.set_page_config(layout="wide")
 st.title("🏫 无人机地面站系统")
@@ -13,10 +12,10 @@ st.title("🏫 无人机地面站系统")
 SCHOOL_CENTER = [118.7490, 32.2340]
 A_DFT = [118.746956, 32.232945]
 B_DFT = [118.751589, 32.235204]
+# 高德地图瓦片（必须添加 attribution）
 SAT_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
 VEC_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
-SAT_ATTR = "高德卫星地图"
-VEC_ATTR = "高德矢量地图"
+ATTR = "高德地图"
 
 # 坐标转换（精简版）
 def gcj2wgs(lng, lat):
@@ -97,7 +96,7 @@ def path_safe(p1,p2,obs,rad_m,h):
         if seg_to_poly_dist(p1,p2,poly) < rad_m-0.1: return False
     return True
 
-# 绕行生成
+# 绕行生成（中点偏移）
 def gen_bypass(A,B,obs,rad_m,h,side='left'):
     avoid = [o for o in obs if should_avoid(o,h)]
     if not avoid: return [A,B]
@@ -137,13 +136,15 @@ def plan_path(A,B,obs,h,rad,strat):
         left=gen_bypass(A,B,obs,rad,h,'left')
         right=gen_bypass(A,B,obs,rad,h,'right')
         if left and right:
-            return left if sum(dist(left[i],left[i+1]) for i in range(len(left)-1)) <= sum(dist(right[i],right[i+1]) for i in range(len(right)-1)) else right
+            len_left = sum(dist(left[i],left[i+1]) for i in range(len(left)-1))
+            len_right = sum(dist(right[i],right[i+1]) for i in range(len(right)-1))
+            return left if len_left <= len_right else right
         return left or right or [A,B]
 
 # 心跳模拟器
 class Heartbeat:
-    def __init__(self,start): self.hist=[]; self.pos=start[:]; self.path=[start[:]]; self.idx=0; self.sim=False; self.pause=False; self.alt=50; self.spd=50; self.prog=0; self.total=0; self.trav=0; self.start_t=None
-    def set_path(self,path,alt,spd): self.path=path; self.idx=0; self.pos=path[0][:]; self.alt=alt; self.spd=spd; self.sim=True; self.pause=False; self.prog=0; self.trav=0; self.total=sum(dist(path[i],path[i+1]) for i in range(len(path)-1)); self.start_t=time.time()
+    def __init__(self,start): self.hist=[]; self.pos=start[:]; self.path=[start[:]]; self.idx=0; self.sim=False; self.pause=False; self.alt=50; self.spd=50; self.prog=0; self.total=0; self.trav=0
+    def set_path(self,path,alt,spd): self.path=path; self.idx=0; self.pos=path[0][:]; self.alt=alt; self.spd=spd; self.sim=True; self.pause=False; self.prog=0; self.trav=0; self.total=sum(dist(path[i],path[i+1]) for i in range(len(path)-1))
     def pause(self): self.pause=True
     def resume(self): self.pause=False
     def stop(self): self.sim=False; self.pause=False
@@ -195,17 +196,12 @@ def add_safety(m, obs, rad, h):
     for o in obs:
         if should_avoid(o,h):
             for pt in o.get('polygon',[]):
-                folium.Circle([pt[1],pt[0]], rad, color='orange', fill=True, fill_opacity=0.2).add_to(m)
+                folium.Circle([pt[1],pt[0]], rad, color='orange', fill=True, fill_opacity=0.2, popup=f"安全区{rad}m").add_to(m)
 
-# 地图生成（添加 attr）
+# 地图生成（添加 attribution）
 def make_map(center, points, obs, hist, path, maptype, blocked, rad, h):
-    if maptype == 'satellite':
-        tiles = SAT_URL
-        attr = SAT_ATTR
-    else:
-        tiles = VEC_URL
-        attr = VEC_ATTR
-    m = folium.Map(location=[center[1],center[0]], zoom_start=16, tiles=tiles, attr=attr)
+    tiles = SAT_URL if maptype=='satellite' else VEC_URL
+    m = folium.Map(location=[center[1],center[0]], zoom_start=16, tiles=tiles, attr=ATTR)
     Draw(export=True, draw_options={'polygon':{'allowIntersection':False,'showArea':True}}).add_to(m)
     add_safety(m, obs, rad, h)
     for i,o in enumerate(obs):
@@ -228,6 +224,7 @@ def make_map(center, points, obs, hist, path, maptype, blocked, rad, h):
 
 # 主程序
 def main():
+    # 初始化状态
     if 'points' not in st.session_state: st.session_state.points = {'A':A_DFT[:],'B':B_DFT[:]}
     if 'obs' not in st.session_state: st.session_state.obs = []
     if 'hb' not in st.session_state: st.session_state.hb = Heartbeat(st.session_state.points['A'][:])
@@ -238,6 +235,9 @@ def main():
     if 'path' not in st.session_state: st.session_state.path = None
     if 'pending_poly' not in st.session_state: st.session_state.pending_poly = None
     if 'pending_h' not in st.session_state: st.session_state.pending_h = 20
+    if 'drone_spd' not in st.session_state: st.session_state.drone_spd = 50
+    if 'safe_rad' not in st.session_state: st.session_state.safe_rad = 5
+    if 'sel_strat' not in st.session_state: st.session_state.sel_strat = 'best'
 
     with st.sidebar:
         st.header("控制面板")
@@ -245,14 +245,14 @@ def main():
         map_type = "satellite" if st.radio("地图", ["卫星影像","矢量街道"]) == "卫星影像" else "vector"
         st.markdown("---")
         st.subheader("无人机参数")
-        drone_spd = st.slider("速度系数",10,100,50)
-        safe_rad = st.number_input("安全半径(米)",1,30,5)
+        st.session_state.drone_spd = st.slider("速度系数",10,100,st.session_state.drone_spd)
+        st.session_state.safe_rad = st.number_input("安全半径(米)",1,30,st.session_state.safe_rad)
         st.session_state.alt = st.number_input("飞行高度(米)",0,200,st.session_state.alt)
         st.markdown("---")
         st.subheader("绕行策略")
         strat = st.radio("避障方式",["最佳航线","向左绕行","向右绕行"])
         strat_map = {"最佳航线":"best","向左绕行":"left","向右绕行":"right"}
-        sel_strat = strat_map[strat]
+        st.session_state.sel_strat = strat_map[strat]
         obs_cnt = len(st.session_state.obs)
         avoid = [o for o in st.session_state.obs if should_avoid(o,st.session_state.alt)]
         blocked = any(line_cross_poly(st.session_state.points['A'],st.session_state.points['B'],o['polygon']) for o in avoid)
@@ -260,11 +260,14 @@ def main():
         if st.button("刷新规划", use_container_width=True):
             with st.spinner("规划中..."):
                 st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],
-                                                  st.session_state.obs,st.session_state.alt,safe_rad,sel_strat)
+                                                  st.session_state.obs,st.session_state.alt,
+                                                  st.session_state.safe_rad,st.session_state.sel_strat)
             st.rerun()
 
     if page == "规划":
         st.header("航线规划 - 强制绕行")
+        blocked = any(line_cross_poly(st.session_state.points['A'],st.session_state.points['B'],o['polygon']) 
+                      for o in st.session_state.obs if should_avoid(o,st.session_state.alt))
         if blocked: st.warning("直线被阻挡，已规划避障航线")
         else: st.success("直线安全")
         st.info("点击地图📐画多边形→设置高度→「添加障碍物」")
@@ -273,30 +276,50 @@ def main():
             st.markdown("#### 🟢 起点 A")
             a_lat = st.number_input("纬度", value=st.session_state.points['A'][1], format="%.6f")
             a_lng = st.number_input("经度", value=st.session_state.points['A'][0], format="%.6f")
-            if st.button("设置A点"): st.session_state.points['A']=[a_lng,a_lat]; st.session_state.path=plan_path(st.session_state.points['A'],st.session_state.points['B'],st.session_state.obs,st.session_state.alt,safe_rad,sel_strat); st.rerun()
+            if st.button("设置A点"):
+                st.session_state.points['A']=[a_lng,a_lat]
+                st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],
+                                                  st.session_state.obs,st.session_state.alt,
+                                                  st.session_state.safe_rad,st.session_state.sel_strat)
+                st.rerun()
             st.markdown("#### 🔴 终点 B")
             b_lat = st.number_input("纬度", value=st.session_state.points['B'][1], format="%.6f", key="b_lat")
             b_lng = st.number_input("经度", value=st.session_state.points['B'][0], format="%.6f", key="b_lng")
-            if st.button("设置B点"): st.session_state.points['B']=[b_lng,b_lat]; st.session_state.path=plan_path(st.session_state.points['A'],st.session_state.points['B'],st.session_state.obs,st.session_state.alt,safe_rad,sel_strat); st.rerun()
+            if st.button("设置B点"):
+                st.session_state.points['B']=[b_lng,b_lat]
+                st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],
+                                                  st.session_state.obs,st.session_state.alt,
+                                                  st.session_state.safe_rad,st.session_state.sel_strat)
+                st.rerun()
             st.markdown("#### 🏗️ 新障碍物高度")
             st.session_state.pending_h = st.number_input("高度(米)",1,200,st.session_state.pending_h)
             if st.button("➕ 添加障碍物"):
                 if st.session_state.pending_poly and len(st.session_state.pending_poly)>=3:
-                    st.session_state.obs.append({"name":f"建筑物{len(st.session_state.obs)+1}","polygon":st.session_state.pending_poly,"height":st.session_state.pending_h})
+                    st.session_state.obs.append({"name":f"建筑物{len(st.session_state.obs)+1}",
+                                                 "polygon":st.session_state.pending_poly,
+                                                 "height":st.session_state.pending_h})
                     st.success(f"已添加，共{len(st.session_state.obs)}个")
                     st.session_state.pending_poly = None
-                    st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],st.session_state.obs,st.session_state.alt,safe_rad,sel_strat)
+                    st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],
+                                                      st.session_state.obs,st.session_state.alt,
+                                                      st.session_state.safe_rad,st.session_state.sel_strat)
                     st.rerun()
                 else: st.warning("请先在地图上画多边形")
-            if st.button("🔄 重新规划路径"): st.session_state.path=plan_path(st.session_state.points['A'],st.session_state.points['B'],st.session_state.obs,st.session_state.alt,safe_rad,sel_strat); st.rerun()
+            if st.button("🔄 重新规划路径"):
+                st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],
+                                                  st.session_state.obs,st.session_state.alt,
+                                                  st.session_state.safe_rad,st.session_state.sel_strat)
+                st.rerun()
             st.markdown("#### ✈️ 飞行控制")
             if st.button("▶️ 开始飞行"):
                 path = st.session_state.path or [st.session_state.points['A'],st.session_state.points['B']]
-                st.session_state.hb.set_path(path,st.session_state.alt,drone_spd)
+                st.session_state.hb.set_path(path,st.session_state.alt,st.session_state.drone_spd)
                 st.session_state.running = True
                 st.session_state.hist = []
                 st.success("飞行开始，请切换至「监控」页面")
-            if st.button("⏹️ 停止飞行"): st.session_state.running=False; st.session_state.hb.stop()
+            if st.button("⏹️ 停止飞行"):
+                st.session_state.running=False
+                st.session_state.hb.stop()
             st.caption(f"A:{st.session_state.points['A']}\nB:{st.session_state.points['B']}")
             if st.session_state.path and len(st.session_state.path)>2:
                 d = sum(dist(st.session_state.path[i],st.session_state.path[i+1]) for i in range(len(st.session_state.path)-1))*111000
@@ -304,8 +327,12 @@ def main():
         with col2:
             center = st.session_state.points['A'] or SCHOOL_CENTER
             if st.session_state.path is None:
-                st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],st.session_state.obs,st.session_state.alt,safe_rad,sel_strat)
-            m = make_map(center, st.session_state.points, st.session_state.obs, st.session_state.hist, st.session_state.path, map_type, blocked, safe_rad, st.session_state.alt)
+                st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],
+                                                  st.session_state.obs,st.session_state.alt,
+                                                  st.session_state.safe_rad,st.session_state.sel_strat)
+            m = make_map(center, st.session_state.points, st.session_state.obs, st.session_state.hist,
+                         st.session_state.path, map_type, blocked,
+                         st.session_state.safe_rad, st.session_state.alt)
             output = st_folium(m, width=700, height=550, returned_objects=["last_active_drawing"])
             if output and output.get("last_active_drawing"):
                 d = output["last_active_drawing"]
@@ -319,15 +346,22 @@ def main():
     elif page == "监控":
         st.header("飞行实时画面 - 任务执行监控")
         c1,c2,c3 = st.columns(3)
-        if c1.button("▶️ 开始任务"): 
+        if c1.button("▶️ 开始任务"):
             if not st.session_state.running:
                 p = st.session_state.path or [st.session_state.points['A'],st.session_state.points['B']]
-                st.session_state.hb.set_path(p,st.session_state.alt,drone_spd)
+                st.session_state.hb.set_path(p,st.session_state.alt,st.session_state.drone_spd)
                 st.session_state.running = True
                 st.rerun()
-            else: st.session_state.hb.resume(); st.rerun()
-        if c2.button("⏸️ 暂停"): st.session_state.hb.pause(); st.rerun()
-        if c3.button("⏹️ 停止"): st.session_state.running=False; st.session_state.hb.stop(); st.rerun()
+            else:
+                st.session_state.hb.resume()
+                st.rerun()
+        if c2.button("⏸️ 暂停"):
+            st.session_state.hb.pause()
+            st.rerun()
+        if c3.button("⏹️ 停止"):
+            st.session_state.running=False
+            st.session_state.hb.stop()
+            st.rerun()
         st.markdown("---")
         if st.session_state.running and time.time()-st.session_state.last_time>=0.2:
             hb = st.session_state.hb.update()
@@ -363,9 +397,8 @@ def main():
         if st.session_state.hb.hist:
             d = st.session_state.hb.hist[0]
             tiles = SAT_URL if map_type=="satellite" else VEC_URL
-            attr = SAT_ATTR if map_type=="satellite" else VEC_ATTR
-            m = folium.Map(location=[d['lat'],d['lng']], zoom_start=17, tiles=tiles, attr=attr)
-            add_safety(m, st.session_state.obs, safe_rad, st.session_state.alt)
+            m = folium.Map(location=[d['lat'],d['lng']], zoom_start=17, tiles=tiles, attr=ATTR)
+            add_safety(m, st.session_state.obs, st.session_state.safe_rad, st.session_state.alt)
             for o in st.session_state.obs:
                 coords=o.get('polygon',[])
                 if len(coords)>=3:
@@ -392,18 +425,26 @@ def main():
                 c2.write(f"高度:{o.get('height',20)}m")
                 if c3.button("删除", key=f"del{i}"):
                     st.session_state.obs.pop(i)
-                    st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],st.session_state.obs,st.session_state.alt,safe_rad,sel_strat)
+                    st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],
+                                                      st.session_state.obs,st.session_state.alt,
+                                                      st.session_state.safe_rad,st.session_state.sel_strat)
                     st.rerun()
             if st.button("💾 保存到缓存"): save_cache()
-            if st.button("📂 从缓存加载"): 
-                if load_cache(): 
-                    st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],st.session_state.obs,st.session_state.alt,safe_rad,sel_strat)
+            if st.button("📂 从缓存加载"):
+                if load_cache():
+                    st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],
+                                                      st.session_state.obs,st.session_state.alt,
+                                                      st.session_state.safe_rad,st.session_state.sel_strat)
                     st.rerun()
-            if st.button("🗑️ 全部清除"): st.session_state.obs=[]; st.session_state.path=plan_path(st.session_state.points['A'],st.session_state.points['B'],[],st.session_state.alt,safe_rad,sel_strat); st.rerun()
+            if st.button("🗑️ 全部清除"):
+                st.session_state.obs=[]
+                st.session_state.path = plan_path(st.session_state.points['A'],st.session_state.points['B'],
+                                                  [],st.session_state.alt,
+                                                  st.session_state.safe_rad,st.session_state.sel_strat)
+                st.rerun()
         with col2:
             tiles = SAT_URL if map_type=="satellite" else VEC_URL
-            attr = SAT_ATTR if map_type=="satellite" else VEC_ATTR
-            m = folium.Map(location=[SCHOOL_CENTER[1],SCHOOL_CENTER[0]], zoom_start=16, tiles=tiles, attr=attr)
+            m = folium.Map(location=[SCHOOL_CENTER[1],SCHOOL_CENTER[0]], zoom_start=16, tiles=tiles, attr=ATTR)
             for o in st.session_state.obs:
                 coords=o.get('polygon',[])
                 if len(coords)>=3:
