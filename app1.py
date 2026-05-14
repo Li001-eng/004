@@ -8,8 +8,8 @@ import math
 import json
 import os
 from datetime import datetime
-import pandas as pd
 from typing import List, Dict, Optional, Tuple, Any
+import pandas as pd
 from dataclasses import dataclass, field
 
 # ==================== 配置常量 ====================
@@ -186,7 +186,7 @@ def create_avoidance_path(start, end, obstacles_gcj, flight_altitude, direction,
     else:
         return find_best_path(start, end, obstacles_gcj, flight_altitude, safety_radius)
 
-# ==================== 心跳包模拟器 ====================
+# ==================== 心跳包模拟器（优化版） ====================
 @dataclass
 class HeartbeatData:
     timestamp: str
@@ -284,7 +284,7 @@ class HeartbeatSimulator:
     def _generate_heartbeat(self, arrived, obstacles_gcj):
         flight_time = (datetime.now()-self.start_time).total_seconds() if self.start_time else 0
         speed = round(config.BASE_SPEED_MPS * (self.speed / 100), 1) if self.simulating else 0
-        # 剩余距离计算（米）
+        # 剩余距离（米）
         if arrived:
             remaining_dist = 0.0
         else:
@@ -294,40 +294,21 @@ class HeartbeatSimulator:
                 for i in range(self.path_index+1, len(self.path)-1):
                     remaining += distance(self.path[i], self.path[i+1])
             remaining_dist = remaining * 111000
-        # 计算当前航点
-        total_waypoints = len(self.path)
+        # 当前航点
+        total_wp = len(self.path)
         if arrived:
-            current_wp = total_waypoints
+            current_wp = total_wp
         else:
             if self.progress >= 1.0:
-                current_wp = total_waypoints
+                current_wp = total_wp
             else:
-                segment_index = int(self.progress * (total_waypoints - 1))
-                current_wp = segment_index + 1
-                current_wp = min(current_wp, total_waypoints)
-        # 预计到达时间
-        if arrived:
-            eta_str = "00:00"
-        elif speed > 0 and remaining_dist > 0:
-            eta_sec = remaining_dist / speed
-            if eta_sec < 60:
-                eta_str = f"{eta_sec:.0f}秒"
-            elif eta_sec < 3600:
-                mins = int(eta_sec // 60)
-                secs = int(eta_sec % 60)
-                eta_str = f"{mins:02d}:{secs:02d}"
-            else:
-                hours = int(eta_sec // 3600)
-                mins = int((eta_sec % 3600)//60)
-                eta_str = f"{hours:02d}:{mins:02d}"
-        else:
-            eta_str = "计算中..."
+                seg_idx = int(self.progress * (total_wp - 1))
+                current_wp = seg_idx + 1
+                current_wp = min(current_wp, total_wp)
         # 电量模拟
-        max_flight_time = 1800
-        battery = max(0, 100 - int((flight_time / max_flight_time)*100))
-        # 电压随机波动
+        battery = max(0, 100 - int((flight_time / 1800)*100))
         voltage = round(22.2 + random.uniform(-0.5, 0.5), 1)
-        heartbeat = HeartbeatData(
+        hb = HeartbeatData(
             timestamp=datetime.now().strftime("%H:%M:%S"),
             flight_time=flight_time,
             lat=self.current_pos[1],
@@ -341,15 +322,15 @@ class HeartbeatSimulator:
             safety_violation=self.safety_violation,
             remaining_distance=remaining_dist,
             current_waypoint=current_wp,
-            total_waypoints=total_waypoints
+            total_waypoints=total_wp
         )
-        self.history.insert(0, heartbeat)
+        self.history.insert(0, hb)
         if len(self.history) > 100:
             self.history.pop()
-        self.flight_log.append(heartbeat)
+        self.flight_log.append(hb)
         if len(self.flight_log) > 1000:
             self.flight_log.pop(0)
-        return heartbeat
+        return hb
 
     def export_flight_data(self):
         if not self.flight_log:
@@ -566,7 +547,6 @@ def render_planning_page(map_type, drone_speed, flight_alt, auto_save, safety_ra
 def render_planning_controls(flight_alt, drone_speed, auto_save, safety_radius):
     st.subheader("🎮 控制面板")
     with st.expander("📍 起点/终点设置", expanded=True):
-        # 坐标输入方式
         st.markdown("#### 🟢 起点 A")
         col_a1, col_a2 = st.columns(2)
         with col_a1:
@@ -579,7 +559,6 @@ def render_planning_controls(flight_alt, drone_speed, auto_save, safety_radius):
                 st.session_state.points_gcj['A'], st.session_state.points_gcj['B'],
                 st.session_state.obstacles_gcj, flight_alt, st.session_state.current_direction, safety_radius
             )
-            st.success(f"✅ 起点已设置")
             st.rerun()
         st.markdown("#### 🔴 终点 B")
         col_b1, col_b2 = st.columns(2)
@@ -593,7 +572,6 @@ def render_planning_controls(flight_alt, drone_speed, auto_save, safety_radius):
                 st.session_state.points_gcj['A'], st.session_state.points_gcj['B'],
                 st.session_state.obstacles_gcj, flight_alt, st.session_state.current_direction, safety_radius
             )
-            st.success(f"✅ 终点已设置")
             st.rerun()
     with st.expander("🤖 路径规划策略", expanded=True):
         col_dir1, col_dir2, col_dir3 = st.columns(3)
@@ -722,7 +700,6 @@ def render_flight_monitoring_page(map_type, flight_alt, drone_speed, safety_radi
                     st.session_state.flight_history = []
                     st.rerun()
             else:
-                # 如果已开始，恢复（如果处于暂停状态）
                 st.session_state.heartbeat_sim.simulating = True
                 st.rerun()
     with col_btn[1]:
@@ -845,12 +822,14 @@ def render_flight_monitoring_page(map_type, flight_alt, drone_speed, safety_radi
         center = (latest.lat, latest.lng)
     else:
         center = (st.session_state.points_gcj['A'][1], st.session_state.points_gcj['A'][0])
+    # 获取航点列表（用于地图标记）
+    waypoints = [st.session_state.points_gcj['A'], st.session_state.points_gcj['B']]
     m = create_monitor_map(
         center[0], center[1], st.session_state.obstacles_gcj,
         st.session_state.planned_path, st.session_state.flight_history,
         [latest.lng, latest.lat] if st.session_state.heartbeat_sim.history else None,
         safety_radius, flight_alt, st.session_state.current_direction,
-        st.session_state.waypoints if 'waypoints' in st.session_state else [st.session_state.points_gcj['A'], st.session_state.points_gcj['B']]
+        waypoints
     )
     folium_static(m, width=1000, height=500)
 
