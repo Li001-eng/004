@@ -16,9 +16,10 @@ B_DFT = [118.751589, 32.235204]
 SAT_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
 VEC_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
 ATTR = "高德地图"
+
 CONFIG_FILE = "obstacle_config.json"
 
-# ==================== 坐标转换 ====================
+# ==================== 坐标转换（完整实现） ====================
 def gcj2wgs(lng, lat):
     if abs(lng) < 72 or abs(lng) > 138 or abs(lat) < 0.8 or abs(lat) > 56: return lng, lat
     dlat = -100 + 2*lng + 3*lat + 0.2*lat*lat + 0.1*lng*lat + 0.2*math.sqrt(abs(lng))
@@ -53,7 +54,7 @@ def wgs2gcj(lng, lat):
     dlng = dlng * 180 / (6378245.0/sqrtmagic*math.cos(rad)*math.pi)
     return lng+dlng, lat+dlat
 
-# ==================== 几何辅助 ====================
+# ==================== 几何辅助函数 ====================
 def dist(p1, p2): return math.hypot(p1[0]-p2[0], p1[1]-p2[1])
 def point_in_poly(p, poly):
     x,y = p; inside=False
@@ -69,6 +70,7 @@ def line_cross_poly(p1,p2,poly):
     for i in range(len(poly)):
         if lines_intersect(p1,p2,poly[i],poly[(i+1)%len(poly)]): return True
     return False
+
 def seg_to_poly_dist(p1, p2, poly):
     min_d = float('inf')
     for pt in poly:
@@ -84,7 +86,9 @@ def seg_to_poly_dist(p1, p2, poly):
             d = dist(pt, (p1[0],p1[1]))
             if d < min_d: min_d = d
     return min_d * 111000
+
 def should_avoid(obs, h): return h <= obs.get('height',20)
+
 def path_safe(p1,p2,obs,rad_m,h):
     for o in obs:
         if not should_avoid(o,h): continue
@@ -274,6 +278,7 @@ class Heartbeat:
         remain_sec = remain_dist / (speed + 0.01) / 111000.0 * 3600 if speed > 0 else 0
         delay = round(random.uniform(10, 50), 1) if self.sim else 0
         loss = round(random.uniform(0, 0.2), 1) if self.sim else 0
+        # 当前航点（基于路径索引）
         total_wp = len(self.path)
         if self.sim:
             if self.prog >= 1.0:
@@ -357,6 +362,7 @@ def main():
         col1,col2 = st.columns([1,1.5])
         with col1:
             st.markdown("#### 🗺️ 航点管理")
+            # 起点
             st.markdown("**起点**")
             col_s = st.columns(2)
             with col_s[0]:
@@ -366,6 +372,7 @@ def main():
             if st.button("更新起点"):
                 st.session_state.waypoints[0] = [a_lng, a_lat]
                 st.rerun()
+            # 中间航点
             st.markdown("**中间航点**")
             if len(st.session_state.waypoints) > 2:
                 for i in range(1, len(st.session_state.waypoints)-1):
@@ -376,6 +383,7 @@ def main():
                         st.rerun()
             else:
                 st.write("暂无中间航点")
+            # 添加新航点
             st.markdown("**添加新航点**")
             col_add = st.columns(2)
             with col_add[0]:
@@ -385,6 +393,7 @@ def main():
             if st.button("➕ 添加航点"):
                 st.session_state.waypoints.insert(-1, [new_lng, new_lat])
                 st.rerun()
+            # 终点
             st.markdown("**终点**")
             col_e = st.columns(2)
             with col_e[0]:
@@ -395,6 +404,7 @@ def main():
                 st.session_state.waypoints[-1] = [b_lng, b_lat]
                 st.rerun()
             st.markdown("---")
+            # 障碍物添加
             st.markdown("#### 🏗️ 新障碍物高度")
             st.session_state.pending_h = st.number_input("高度(米)",1,200,st.session_state.pending_h)
             if st.button("➕ 添加障碍物"):
@@ -489,7 +499,7 @@ def main():
                 st.session_state.hist = []
                 st.rerun()
         st.markdown("---")
-        # 自动更新飞行
+        # 自动更新
         if st.session_state.running and time.time() - st.session_state.last_time >= 0.2:
             new_hb = st.session_state.hb.update()
             st.session_state.last_time = time.time()
@@ -499,20 +509,20 @@ def main():
             if not st.session_state.hb.sim:
                 st.session_state.running = False
             st.rerun()
-        # 获取最新数据
         if st.session_state.hb.hist:
             d = st.session_state.hb.hist[0]
         else:
-            d = {"current_wp":"0/0","speed":0,"elapsed":0,"remain":"00:00","battery":0,"progress":0,"remaining_distance_m":0}
+            d = {"current_wp":"0/0","speed":0,"elapsed":0,"total":0,"traveled":0,"remain":"00:00","battery":0,"progress":0,"delay_ms":0,"loss_percent":0,"remaining_distance_m":0,"arrived":False}
+        # 航点计算
         total_wp = len(st.session_state.waypoints) if st.session_state.waypoints else 1
-        cur_wp_str = d.get('current_wp','0/0')
-        if '/' in cur_wp_str:
-            cur_wp, _ = map(int, cur_wp_str.split('/'))
+        curr_wp_str = d.get('current_wp','0/0')
+        if '/' in curr_wp_str:
+            curr, _ = map(int, curr_wp_str.split('/'))
         else:
-            cur_wp = 0
+            curr = 0
         st.markdown("### 📊 实时飞行数据")
         row1 = st.columns(4)
-        row1[0].metric("当前航点", f"{cur_wp}/{total_wp}")
+        row1[0].metric("当前航点", f"{curr}/{total_wp}")
         row1[1].metric("飞行速度", f"{d.get('speed',0)} m/s")
         elapsed = d.get('elapsed',0)
         row1[2].metric("已用时间", f"{int(elapsed//60):02d}:{int(elapsed%60):02d}")
@@ -523,6 +533,7 @@ def main():
         row2[1].metric("电量模拟", f"{d.get('battery',0)}%")
         st.progress(d.get('progress',0), text=f"✈️ 任务进度: {d.get('progress',0)*100:.1f}%")
         st.markdown("---")
+        # 设备状态与通信拓扑
         col_status, col_top = st.columns(2)
         with col_status:
             st.subheader("📡 设备状态")
@@ -543,6 +554,7 @@ def main():
             st.code("GCS → OBC → FCU → UAV")
             st.caption("数据流：遥控指令 → 飞控 → 执行器 | 遥测数据 ← 飞控 ← 传感器")
         st.markdown("---")
+        # 实时飞行地图
         st.subheader("🗺️ 实时飞行地图")
         if st.session_state.hb.hist:
             latest = st.session_state.hb.hist[0]
@@ -567,11 +579,13 @@ def main():
             latest = st.session_state.hb.hist[0]
             folium.Marker([latest['lat'], latest['lng']], popup=f"📍 当前位置\n高度:{latest['altitude']}m",
                           icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(m)
+        # 航点标记
         for i,wp in enumerate(st.session_state.waypoints):
             color = 'green' if i==0 else ('red' if i==len(st.session_state.waypoints)-1 else 'blue')
             folium.Marker([wp[1], wp[0]], popup=f"航点{i+1}", icon=folium.Icon(color=color)).add_to(m)
         folium_static(m, width=1000, height=500)
         st.markdown("---")
+        # 数据图表与导出
         st.subheader("📈 飞行数据图表")
         if len(st.session_state.hb.hist) > 1:
             df_data = []
@@ -579,8 +593,9 @@ def main():
                 df_data.append({
                     "时间(s)": i*0.2,
                     "速度(m/s)": h.get('speed',0),
-                    "剩余距离(m)": max(0,h.get('remaining_distance_m',0)),
+                    "剩余距离(m)": max(0, h.get('remaining_distance_m',0)),
                     "电量(%)": h.get('battery',0),
+                    "航点进度": int(h.get('current_wp','0/0').split('/')[0]) if '/' in h.get('current_wp','0/0') else 0
                 })
             df = pd.DataFrame(df_data)
             col_ch1, col_ch2 = st.columns(2)
@@ -594,12 +609,16 @@ def main():
             with col_ch3:
                 st.line_chart(df, x="时间(s)", y="电量(%)", height=300)
                 st.caption("电量模拟趋势")
+            with col_ch4:
+                st.line_chart(df, x="时间(s)", y="航点进度", height=300)
+                st.caption("航点进度趋势")
         st.markdown("---")
         col_exp1, col_exp2 = st.columns(2)
         with col_exp1:
             if st.button("📊 导出飞行数据CSV", use_container_width=True):
                 if st.session_state.hb.hist:
                     export_df = pd.DataFrame(st.session_state.hb.hist)
+                    export_df = export_df[['timestamp','lat','lng','altitude','speed','battery','remaining_distance_m','progress']]
                     csv = export_df.to_csv(index=False)
                     st.download_button("点击下载", csv, "flight_data.csv", "text/csv")
                 else:
