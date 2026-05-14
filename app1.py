@@ -2,6 +2,7 @@ import streamlit as st
 import folium
 from streamlit_folium import folium_static, st_folium
 from folium import plugins
+from folium.plugins import Draw
 import random
 import time
 import math
@@ -156,9 +157,8 @@ def plan_full_path(waypoints, obs, h, rad, strat):
             full.extend(seg[1:])
     return full
 
-# ==================== 辅助函数（需在使用前定义） ====================
+# ==================== 辅助函数 ====================
 def point_to_seg_meters(p, a, b):
-    """点到线段距离（米）"""
     ap = (p[0]-a[0], p[1]-a[1])
     ab = (b[0]-a[0], b[1]-a[1])
     t = (ap[0]*ab[0] + ap[1]*ab[1]) / (ab[0]*ab[0] + ab[1]*ab[1] + 1e-9)
@@ -167,7 +167,6 @@ def point_to_seg_meters(p, a, b):
     return math.hypot(p[0]-proj[0], p[1]-proj[1]) * 111000
 
 def check_safety_radius(drone_pos, obstacles, flight_alt, safe_radius):
-    """检查安全半径是否被侵犯"""
     if not drone_pos:
         return True, None, None
     min_dist = float('inf')
@@ -186,7 +185,7 @@ def check_safety_radius(drone_pos, obstacles, flight_alt, safe_radius):
         return False, min_dist, danger_name
     return True, min_dist if min_dist!=float('inf') else None, None
 
-# ==================== 心跳模拟器（增强版） ====================
+# ==================== 心跳模拟器 ====================
 class HeartbeatSim:
     def __init__(self,start):
         self.hist = []
@@ -263,7 +262,6 @@ class HeartbeatSim:
         return self._hb(obstacles_gcj, safe_radius)
     def _hb(self, obstacles_gcj, safe_radius):
         speed = round(0.5 + (self.spd/100)*4.5,1) if self.sim and not self.pause else 0
-        # 剩余距离（米）
         if self.sim and not self.pause:
             remaining_in_path = 0.0
             if self.idx < len(self.path)-1:
@@ -273,12 +271,9 @@ class HeartbeatSim:
             remaining_dist = remaining_in_path * 111000
         else:
             remaining_dist = max(0, self.total - self.trav) * 111000
-        # 安全半径检查
         safe, min_d, danger = check_safety_radius(self.pos, obstacles_gcj, self.alt, safe_radius)
         self.safety_violation = not safe
-        # 电池模拟
         battery = max(0, 100 - int(self.prog * 100))
-        # 预计到达时间
         if speed > 0 and remaining_dist > 0:
             eta_sec = remaining_dist / speed
             if eta_sec < 60:
@@ -289,7 +284,6 @@ class HeartbeatSim:
                 remain_str = f"{minutes:02d}:{seconds:02d}"
         else:
             remain_str = "00:00"
-        # 电压、卫星、延迟、丢包率
         voltage = 22.2 + random.uniform(-0.5,0.5)
         satellites = random.randint(8,14)
         delay = round(random.uniform(10,50),1) if self.sim else 0
@@ -577,7 +571,6 @@ def main():
         else:
             d = {"current_wp":"0/0","speed":0,"elapsed":0,"total":0,"traveled":0,"remain":"00:00","battery":0,"progress":0,"delay_ms":0,"loss_percent":0,
                  "flight_time":0,"voltage":22.2,"satellites":0,"arrived":False,"safety_violation":False,"remaining_distance":0}
-        # 计算当前航点进度（基于航点总数）
         total_waypoints = len(st.session_state.waypoints)
         if total_waypoints > 0 and 'progress' in d:
             segment_index = int(d['progress'] * (total_waypoints - 1))
