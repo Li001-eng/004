@@ -156,7 +156,37 @@ def plan_full_path(waypoints, obs, h, rad, strat):
             full.extend(seg[1:])
     return full
 
-# ==================== 心跳模拟器（增强版，支持监控所需所有字段） ====================
+# ==================== 辅助函数（需在使用前定义） ====================
+def point_to_seg_meters(p, a, b):
+    """点到线段距离（米）"""
+    ap = (p[0]-a[0], p[1]-a[1])
+    ab = (b[0]-a[0], b[1]-a[1])
+    t = (ap[0]*ab[0] + ap[1]*ab[1]) / (ab[0]*ab[0] + ab[1]*ab[1] + 1e-9)
+    t = max(0, min(1, t))
+    proj = (a[0] + t*ab[0], a[1] + t*ab[1])
+    return math.hypot(p[0]-proj[0], p[1]-proj[1]) * 111000
+
+def check_safety_radius(drone_pos, obstacles, flight_alt, safe_radius):
+    """检查安全半径是否被侵犯"""
+    if not drone_pos:
+        return True, None, None
+    min_dist = float('inf')
+    danger_name = None
+    for obs in obstacles:
+        if obs.get('height',20) > flight_alt:
+            poly = obs.get('polygon',[])
+            if poly:
+                for i in range(len(poly)):
+                    p1 = poly[i]; p2 = poly[(i+1)%len(poly)]
+                    d = point_to_seg_meters(drone_pos, p1, p2)
+                    if d < min_dist:
+                        min_dist = d
+                        danger_name = obs.get('name','障碍物')
+    if min_dist < safe_radius:
+        return False, min_dist, danger_name
+    return True, min_dist if min_dist!=float('inf') else None, None
+
+# ==================== 心跳模拟器（增强版） ====================
 class HeartbeatSim:
     def __init__(self,start):
         self.hist = []
@@ -233,23 +263,20 @@ class HeartbeatSim:
         return self._hb(obstacles_gcj, safe_radius)
     def _hb(self, obstacles_gcj, safe_radius):
         speed = round(0.5 + (self.spd/100)*4.5,1) if self.sim and not self.pause else 0
-        # 计算剩余距离（米）
+        # 剩余距离（米）
         if self.sim and not self.pause:
             remaining_in_path = 0.0
             if self.idx < len(self.path)-1:
-                # 当前段剩余
-                current_start = self.path[self.idx]
                 remaining_in_path += dist(self.pos, self.path[self.idx+1])
                 for i in range(self.idx+1, len(self.path)-1):
                     remaining_in_path += dist(self.path[i], self.path[i+1])
             remaining_dist = remaining_in_path * 111000
         else:
             remaining_dist = max(0, self.total - self.trav) * 111000
-        # 检查安全半径
+        # 安全半径检查
         safe, min_d, danger = check_safety_radius(self.pos, obstacles_gcj, self.alt, safe_radius)
         self.safety_violation = not safe
         # 电池模拟
-        max_flight_time = 1800
         battery = max(0, 100 - int(self.prog * 100))
         # 预计到达时间
         if speed > 0 and remaining_dist > 0:
@@ -262,11 +289,9 @@ class HeartbeatSim:
                 remain_str = f"{minutes:02d}:{seconds:02d}"
         else:
             remain_str = "00:00"
-        # 电压模拟
+        # 电压、卫星、延迟、丢包率
         voltage = 22.2 + random.uniform(-0.5,0.5)
-        # 卫星数
         satellites = random.randint(8,14)
-        # 延迟/丢包率
         delay = round(random.uniform(10,50),1) if self.sim else 0
         loss = round(random.uniform(0,0.2),1) if self.sim else 0
         arrived = not self.sim and self.prog >= 1.0
@@ -293,36 +318,6 @@ class HeartbeatSim:
             "safety_violation": self.safety_violation,
             "remaining_distance": remaining_dist
         }
-
-# 安全半径检查函数
-def check_safety_radius(drone_pos, obstacles, flight_alt, safe_radius):
-    if not drone_pos:
-        return True, None, None
-    min_dist = float('inf')
-    danger_name = None
-    for obs in obstacles:
-        if obs.get('height',20) > flight_alt:
-            poly = obs.get('polygon',[])
-            if poly:
-                for i in range(len(poly)):
-                    p1 = poly[i]; p2 = poly[(i+1)%len(poly)]
-                    # 点到线段距离（米）
-                    d = point_to_seg_meters(drone_pos, p1, p2)
-                    if d < min_dist:
-                        min_dist = d
-                        danger_name = obs.get('name','障碍物')
-    if min_dist < safe_radius:
-        return False, min_dist, danger_name
-    return True, min_dist if min_dist!=float('inf') else None, None
-
-def point_to_seg_meters(p, a, b):
-    # 点到线段距离（米）
-    ap = (p[0]-a[0], p[1]-a[1])
-    ab = (b[0]-a[0], b[1]-a[1])
-    t = (ap[0]*ab[0] + ap[1]*ab[1]) / (ab[0]*ab[0] + ab[1]*ab[1] + 1e-9)
-    t = max(0, min(1, t))
-    proj = (a[0]+t*ab[0], a[1]+t*ab[1])
-    return math.hypot(p[0]-proj[0], p[1]-proj[1]) * 111000
 
 # ==================== 障碍物缓存 ====================
 def save_cache():
@@ -370,7 +365,7 @@ def make_map(center, waypoints, obs, hist, full_path, maptype, rad, h, drone_pos
         trail = [[p[1],p[0]] for p in hist[-30:] if len(p)==2]
         if len(trail)>1: folium.PolyLine(trail, color='orange', weight=2).add_to(m)
     if drone_pos:
-        folium.Circle([drone_pos[1],drone_pos[0]], rad, color='blue', fill=True, fill_opacity=0.2, popup=f"无人机安全区").add_to(m)
+        folium.Circle([drone_pos[1],drone_pos[0]], rad, color='blue', fill=True, fill_opacity=0.2, popup="安全区").add_to(m)
         folium.Marker([drone_pos[1],drone_pos[0]], popup="无人机", icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(m)
     return m
 
@@ -582,16 +577,14 @@ def main():
         else:
             d = {"current_wp":"0/0","speed":0,"elapsed":0,"total":0,"traveled":0,"remain":"00:00","battery":0,"progress":0,"delay_ms":0,"loss_percent":0,
                  "flight_time":0,"voltage":22.2,"satellites":0,"arrived":False,"safety_violation":False,"remaining_distance":0}
-        # 计算当前航点进度（基于路径点）
-        total_waypoints = len(st.session_state.waypoints) if st.session_state.waypoints else 0
+        # 计算当前航点进度（基于航点总数）
+        total_waypoints = len(st.session_state.waypoints)
         if total_waypoints > 0 and 'progress' in d:
-            # 根据进度估算当前航点序号
             segment_index = int(d['progress'] * (total_waypoints - 1))
             current_wp_num = segment_index + 1
             current_wp_num = min(current_wp_num, total_waypoints)
         else:
             current_wp_num = 0
-        # 主要指标卡片
         st.markdown("### ✈️ 飞行进度")
         st.progress(d.get('progress',0), text=f"任务进度: {d.get('progress',0)*100:.1f}%")
         st.markdown("### 📊 实时飞行数据")
@@ -689,7 +682,6 @@ def main():
                 "进度": f"{h['progress']*100:.1f}%"
             } for h in st.session_state.hb.hist[:20]])
             st.dataframe(log_df, use_container_width=True)
-            # 导出按钮
             if st.button("📊 导出完整飞行数据", use_container_width=True):
                 full_df = pd.DataFrame([{
                     "timestamp": h['timestamp'],
