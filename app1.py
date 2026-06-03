@@ -11,6 +11,7 @@ import os
 from datetime import datetime
 import pandas as pd
 import threading
+from streamlit_autorefresh import st_autorefresh  # 新增自动刷新组件
 
 # ==================== 配置常量 ====================
 SCHOOL_CENTER = [118.7490, 32.2340]
@@ -21,7 +22,7 @@ VEC_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&
 ATTR = "高德地图"
 CONFIG_FILE = "obstacle_config.json"
 BASE_SPEED_MPS = 5.0
-HEARTBEAT_INTERVAL = 3.0          # 自动刷新间隔（秒）
+HEARTBEAT_INTERVAL = 3  # 自动刷新间隔（秒）
 
 # ==================== 坐标转换 ====================
 def gcj2wgs(lng, lat):
@@ -548,6 +549,7 @@ def main():
                     st.session_state.hb.set_path(st.session_state.full_path, st.session_state.alt, st.session_state.drone_spd)
                     st.session_state.running = True
                     st.session_state.hist = []
+                    st.session_state.last_time = time.time()   # 重置计时基准
                     st.success("飞行开始，请切换至「监控」页面")
             
             if st.button("⏹️ 停止飞行"):
@@ -583,9 +585,10 @@ def main():
     elif page == "监控":
         st.header("📡 飞行实时画面 - 任务执行监控")
         
-        # ========== 关键：使用 HTML meta refresh 实现自动刷新 ==========
-        st.markdown(f'<meta http-equiv="refresh" content="{HEARTBEAT_INTERVAL}">', unsafe_allow_html=True)
-        # ===============================================================
+        # ========== 使用 streamlit_autorefresh 实现自动刷新（仅监控页面） ==========
+        # 每 HEARTBEAT_INTERVAL 秒自动重新运行此页面，不会导致浏览器完整重载
+        st_autorefresh(interval=HEARTBEAT_INTERVAL * 1000, key="monitor_autorefresh")
+        # ===========================================================================
         
         # 控制按钮
         col1, col2, col3, col4 = st.columns(4)
@@ -597,7 +600,7 @@ def main():
                     else:
                         st.session_state.hb.set_path(st.session_state.full_path, st.session_state.alt, st.session_state.drone_spd)
                         st.session_state.running = True
-                        st.session_state.last_time = time.time()  # 重置计时
+                        st.session_state.last_time = time.time()
                 else:
                     st.session_state.hb.do_resume()
         
@@ -619,28 +622,23 @@ def main():
         
         st.markdown("---")
         
-        # ========== 自动位置更新（基于实际时间差） ==========
+        # ========== 自动位置更新（基于时间差） ==========
         if st.session_state.running and not st.session_state.hb.is_paused:
             now = time.time()
-            # 计算距离上次更新经过的时间（秒）
             dt = min(now - st.session_state.last_time, HEARTBEAT_INTERVAL)
             if dt > 0:
-                # 更新无人机位置
                 st.session_state.hb.update(st.session_state.obs, st.session_state.safe_rad, dt)
-                # 记录轨迹
                 if st.session_state.hb.hist:
                     d = st.session_state.hb.hist[0]
                     st.session_state.hist.append([d['lng'], d['lat']])
                     if len(st.session_state.hist) > 200:
                         st.session_state.hist.pop(0)
-                    # 检查是否到达
                     if d['arrived']:
                         st.session_state.running = False
                         st.success("🏁 无人机已安全到达目的地！")
-                # 更新时间戳
                 st.session_state.last_time = now
                 st.session_state.update_counter += 1
-        # =====================================================
+        # =================================================
         
         # 获取最新心跳数据
         if st.session_state.hb.hist:
@@ -759,7 +757,7 @@ def main():
             st.dataframe(log_df, use_container_width=True)
         
         # 显示自动刷新状态
-        st.info(f"🔄 页面自动刷新间隔 {HEARTBEAT_INTERVAL} 秒 | 位置更新次数: {st.session_state.update_counter}")
+        st.info(f"🔄 监控页面每 {HEARTBEAT_INTERVAL} 秒自动刷新 | 位置更新次数: {st.session_state.update_counter}")
     
     elif page == "障碍物":
         st.header("🏗️ 障碍物管理")
