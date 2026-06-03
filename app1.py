@@ -250,20 +250,13 @@ class HeartbeatSim:
         self.start_time = None
         self.last_update_time = None
     
-    def update(self, obstacles_gcj, safe_radius):
+    def update(self, obstacles_gcj, safe_radius, dt):
+        """手动传入时间步长 dt (秒)"""
         if not self.sim or self.is_paused:
             return self._hb(obstacles_gcj, safe_radius)
         
-        current_time = time.time()
-        if self.last_update_time is None:
-            self.last_update_time = current_time
-            return self._hb(obstacles_gcj, safe_radius)
-        
-        dt = min(current_time - self.last_update_time, HEARTBEAT_INTERVAL)
-        self.last_update_time = current_time
-        
         if self.start_time:
-            self.elapsed = current_time - self.start_time
+            self.elapsed += dt
         
         if self.idx < len(self.path) - 1:
             tar = self.path[self.idx + 1]
@@ -590,6 +583,10 @@ def main():
     elif page == "监控":
         st.header("📡 飞行实时画面 - 任务执行监控")
         
+        # ========== 关键：使用 HTML meta refresh 实现自动刷新 ==========
+        st.markdown(f'<meta http-equiv="refresh" content="{HEARTBEAT_INTERVAL}">', unsafe_allow_html=True)
+        # ===============================================================
+        
         # 控制按钮
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -600,6 +597,7 @@ def main():
                     else:
                         st.session_state.hb.set_path(st.session_state.full_path, st.session_state.alt, st.session_state.drone_spd)
                         st.session_state.running = True
+                        st.session_state.last_time = time.time()  # 重置计时
                 else:
                     st.session_state.hb.do_resume()
         
@@ -621,28 +619,28 @@ def main():
         
         st.markdown("---")
         
-        # ========== 自动刷新逻辑（无条件自动刷新，无需手动点击） ==========
-        now = time.time()
-        if now - st.session_state.last_time >= HEARTBEAT_INTERVAL:
-            # 更新时间戳
-            st.session_state.last_time = now
-            
-            # 如果正在飞行且未暂停，则更新模拟器位置
-            if st.session_state.running and not st.session_state.hb.is_paused:
-                st.session_state.hb.update(st.session_state.obs, st.session_state.safe_rad)
+        # ========== 自动位置更新（基于实际时间差） ==========
+        if st.session_state.running and not st.session_state.hb.is_paused:
+            now = time.time()
+            # 计算距离上次更新经过的时间（秒）
+            dt = min(now - st.session_state.last_time, HEARTBEAT_INTERVAL)
+            if dt > 0:
+                # 更新无人机位置
+                st.session_state.hb.update(st.session_state.obs, st.session_state.safe_rad, dt)
+                # 记录轨迹
                 if st.session_state.hb.hist:
                     d = st.session_state.hb.hist[0]
                     st.session_state.hist.append([d['lng'], d['lat']])
                     if len(st.session_state.hist) > 200:
                         st.session_state.hist.pop(0)
+                    # 检查是否到达
                     if d['arrived']:
                         st.session_state.running = False
                         st.success("🏁 无人机已安全到达目的地！")
+                # 更新时间戳
+                st.session_state.last_time = now
                 st.session_state.update_counter += 1
-            
-            # 无论是否飞行，都触发页面自动重绘
-            st.rerun()
-        # =============================================================
+        # =====================================================
         
         # 获取最新心跳数据
         if st.session_state.hb.hist:
@@ -760,13 +758,8 @@ def main():
             } for h in st.session_state.hb.hist[:10]])
             st.dataframe(log_df, use_container_width=True)
         
-        # 显示更新状态
-        if st.session_state.running and not d.get('paused', False):
-            st.info(f"🔄 自动飞行中 (自动刷新间隔 {HEARTBEAT_INTERVAL} 秒) | 更新次数: {st.session_state.update_counter}")
-        elif st.session_state.running:
-            st.info(f"⏸️ 飞行已暂停 | 自动刷新间隔 {HEARTBEAT_INTERVAL} 秒")
-        else:
-            st.info(f"💡 提示：点击「开始/继续」启动自动飞行 | 页面将每 {HEARTBEAT_INTERVAL} 秒自动刷新")
+        # 显示自动刷新状态
+        st.info(f"🔄 页面自动刷新间隔 {HEARTBEAT_INTERVAL} 秒 | 位置更新次数: {st.session_state.update_counter}")
     
     elif page == "障碍物":
         st.header("🏗️ 障碍物管理")
