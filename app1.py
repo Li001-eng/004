@@ -21,7 +21,7 @@ VEC_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&
 ATTR = "高德地图"
 CONFIG_FILE = "obstacle_config.json"
 BASE_SPEED_MPS = 5.0
-HEARTBEAT_INTERVAL = 3.0          # 监控页面自动刷新间隔（秒），从0.5改为3
+HEARTBEAT_INTERVAL = 3.0          # 自动刷新间隔（秒）
 
 # ==================== 坐标转换 ====================
 def gcj2wgs(lng, lat):
@@ -259,7 +259,6 @@ class HeartbeatSim:
             self.last_update_time = current_time
             return self._hb(obstacles_gcj, safe_radius)
         
-        # 关键修改：时间步长上限改为 HEARTBEAT_INTERVAL，而不是固定 0.5
         dt = min(current_time - self.last_update_time, HEARTBEAT_INTERVAL)
         self.last_update_time = current_time
         
@@ -622,12 +621,15 @@ def main():
         
         st.markdown("---")
         
-        # 自动更新逻辑 - 使用 session_state 计数器触发刷新
-        if st.session_state.running and not st.session_state.hb.is_paused:
-            current_time = time.time()
-            if current_time - st.session_state.last_time >= HEARTBEAT_INTERVAL:
+        # ========== 自动刷新逻辑（无条件自动刷新，无需手动点击） ==========
+        now = time.time()
+        if now - st.session_state.last_time >= HEARTBEAT_INTERVAL:
+            # 更新时间戳
+            st.session_state.last_time = now
+            
+            # 如果正在飞行且未暂停，则更新模拟器位置
+            if st.session_state.running and not st.session_state.hb.is_paused:
                 st.session_state.hb.update(st.session_state.obs, st.session_state.safe_rad)
-                st.session_state.last_time = current_time
                 if st.session_state.hb.hist:
                     d = st.session_state.hb.hist[0]
                     st.session_state.hist.append([d['lng'], d['lat']])
@@ -637,8 +639,10 @@ def main():
                         st.session_state.running = False
                         st.success("🏁 无人机已安全到达目的地！")
                 st.session_state.update_counter += 1
-                time.sleep(0.1)
-                st.rerun()
+            
+            # 无论是否飞行，都触发页面自动重绘
+            st.rerun()
+        # =============================================================
         
         # 获取最新心跳数据
         if st.session_state.hb.hist:
@@ -756,13 +760,13 @@ def main():
             } for h in st.session_state.hb.hist[:10]])
             st.dataframe(log_df, use_container_width=True)
         
-        # 显示更新计数（调试用）
+        # 显示更新状态
         if st.session_state.running and not d.get('paused', False):
-            st.info(f"🔄 自动飞行中... 更新次数: {st.session_state.update_counter}")
+            st.info(f"🔄 自动飞行中 (自动刷新间隔 {HEARTBEAT_INTERVAL} 秒) | 更新次数: {st.session_state.update_counter}")
         elif st.session_state.running:
-            st.info("⏸️ 飞行已暂停")
+            st.info(f"⏸️ 飞行已暂停 | 自动刷新间隔 {HEARTBEAT_INTERVAL} 秒")
         else:
-            st.info("💡 提示：点击「开始/继续」启动自动飞行")
+            st.info(f"💡 提示：点击「开始/继续」启动自动飞行 | 页面将每 {HEARTBEAT_INTERVAL} 秒自动刷新")
     
     elif page == "障碍物":
         st.header("🏗️ 障碍物管理")
