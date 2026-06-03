@@ -10,7 +10,6 @@ import json
 import os
 from datetime import datetime
 import pandas as pd
-import threading
 from streamlit_autorefresh import st_autorefresh
 
 # ==================== 配置常量 ====================
@@ -191,11 +190,51 @@ def check_safety_radius(drone_pos, obstacles, flight_alt, safe_radius):
         return False, min_dist, danger_name
     return True, min_dist if min_dist!=float('inf') else None, None
 
+# ==================== 通信日志管理 ====================
+def add_log(message, direction="OBC内部"):
+    """添加通信日志
+    direction: "GCS → OBC", "OBC → FCU", "FCU → OBC", "OBC → GCS", "OBC内部"
+    """
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]  # 毫秒精度
+    log_entry = {
+        "time": timestamp,
+        "direction": direction,
+        "message": message
+    }
+    if "comm_logs" not in st.session_state:
+        st.session_state.comm_logs = []
+    st.session_state.comm_logs.insert(0, log_entry)
+    # 保留最多50条
+    if len(st.session_state.comm_logs) > 50:
+        st.session_state.comm_logs = st.session_state.comm_logs[:50]
+
+def log_mission_start(waypoints, alt):
+    """记录导航目标（GCS → OBC）"""
+    start = waypoints[0]
+    end = waypoints[-1]
+    msg = f"起点: ({start[1]:.6f}, {start[0]:.6f})  终点: ({end[1]:.6f}, {end[0]:.6f})  目标高度: {alt}m"
+    add_log(msg, "GCS → OBC")
+
+def log_plan_start(obs_count, algo="A*"):
+    add_log(f"开始航线规划  算法: {algo}  障碍物数量: {obs_count}", "OBC内部")
+
+def log_plan_complete(type="horizontal", waypoint_count=0, length_m=0):
+    add_log(f"航线规划完成  类型: {type}  航点数: {waypoint_count}  路径长度: {length_m:.1f}m", "OBC内部")
+
+def log_waypoint_reached(wp_index, total_wps):
+    add_log(f"WP_REACHED #{wp_index}", "FCU → OBC → GCS")
+
+def log_mission_complete():
+    add_log("MISSION_COMPLETE", "FCU → OBC → GCS")
+
+def log_mode_change(mode):
+    add_log(f"ACK | Mode: {mode}", "FCU → OBC → GCS")
+
 # ==================== 心跳模拟器（加固版） ====================
 class HeartbeatSim:
     def __init__(self, start):
         self.hist = []
-        self.pos = list(start)  # 确保为列表
+        self.pos = list(start)
         self.path = [list(start)]
         self.idx = 0
         self.sim = False
@@ -209,9 +248,10 @@ class HeartbeatSim:
         self.elapsed = 0
         self.safety_violation = False
         self.last_update_time = None
+        self.last_logged_wp = 0  # 用于记录已发送的航点到达日志
 
     def set_path(self, path, alt, spd):
-        self.path = [list(p) for p in path]  # 转为列表
+        self.path = [list(p) for p in path]
         self.idx = 0
         self.pos = list(path[0])
         self.alt = alt
@@ -226,6 +266,9 @@ class HeartbeatSim:
         self.elapsed = 0
         self.safety_violation = False
         self.hist = []
+        self.last_logged_wp = 0
+        # 记录模式切换日志
+        log_mode_change("AUTO")
 
     def reset(self):
         if self.path:
@@ -240,6 +283,7 @@ class HeartbeatSim:
             self.elapsed = 0
             self.safety_violation = False
             self.hist = []
+            self.last_logged_wp = 0
 
     def do_pause(self):
         self.is_paused = True
@@ -254,11 +298,10 @@ class HeartbeatSim:
         self.last_update_time = None
 
     def update(self, obstacles_gcj, safe_radius, dt):
-        """手动传入时间步长 dt (秒)，加固了类型和除零保护"""
         if not self.sim or self.is_paused:
             return self._hb(obstacles_gcj, safe_radius)
 
-        # 确保 self.pos 是可变列表且元素为数值
+        # 类型安全
         if not isinstance(self.pos, list):
             self.pos = list(self.pos)
         if len(self.pos) != 2:
@@ -272,9 +315,10 @@ class HeartbeatSim:
         if self.start_time:
             self.elapsed += dt
 
+        prev_idx = self.idx
+
         if self.idx < len(self.path) - 1:
             tar = self.path[self.idx + 1]
-            # 确保目标点也为数值
             if not isinstance(tar, (list, tuple)) or len(tar) < 2:
                 tar = [0.0, 0.0]
             dx = float(tar[0]) - self.pos[0]
@@ -290,14 +334,12 @@ class HeartbeatSim:
                 self.pos = list(tar)
                 self.idx += 1
             else:
-                # 避免除零
                 if distance_to_target > 1e-12:
                     ratio = step_deg / distance_to_target
                     self.pos[0] += dx * ratio
                     self.pos[1] += dy * ratio
                     self.trav += step_deg
                 else:
-                    # 几乎重合，直接跳到目标点
                     self.trav += distance_to_target
                     self.pos = list(tar)
                     self.idx += 1
@@ -308,9 +350,22 @@ class HeartbeatSim:
             if self.idx >= len(self.path) - 1:
                 self.sim = False
                 self.prog = 1.0
+
         else:
             self.sim = False
             self.prog = 1.0
+
+        # 航点到达日志：当 idx 增加时，记录到达的航点编号（注意：起点不记录）
+        new_idx = self.idx
+        if new_idx > prev_idx:
+            for wp_num in range(prev_idx + 1, new_idx + 1):
+                if wp_num <= len(self.path) - 1:  # 路径点包括起点，起点不算航点
+                    log_waypoint_reached(wp_num, len(self.path)-1)
+
+        # 任务完成日志
+        if not self.sim and self.prog >= 1.0 and self.last_logged_wp != -1:
+            log_mission_complete()
+            self.last_logged_wp = -1
 
         hb_data = self._hb(obstacles_gcj, safe_radius)
         self.hist.insert(0, hb_data)
@@ -461,10 +516,11 @@ def main():
     if 'new_wp_lng' not in st.session_state: st.session_state.new_wp_lng = A_DFT[0]
     if 'new_wp_lat' not in st.session_state: st.session_state.new_wp_lat = A_DFT[1]
     if 'update_counter' not in st.session_state: st.session_state.update_counter = 0
+    if 'comm_logs' not in st.session_state: st.session_state.comm_logs = []
 
     with st.sidebar:
         st.header("控制面板")
-        page = st.radio("模块", ["规划", "监控", "障碍物"])
+        page = st.radio("模块", ["规划", "监控", "障碍物", "通信链路"])
         map_type = "satellite" if st.radio("地图", ["卫星影像", "矢量街道"]) == "卫星影像" else "vector"
         st.markdown("---")
         st.subheader("无人机参数")
@@ -480,11 +536,17 @@ def main():
 
         if st.button("刷新规划", use_container_width=True):
             with st.spinner("规划全航线中..."):
+                obs_count = len(st.session_state.obs)
+                log_plan_start(obs_count)
                 st.session_state.full_path = plan_full_path(st.session_state.waypoints,
                                                               st.session_state.obs,
                                                               st.session_state.alt,
                                                               st.session_state.safe_rad,
                                                               st.session_state.sel_strat)
+                if st.session_state.full_path:
+                    # 计算路径长度（米）
+                    length = sum(dist(st.session_state.full_path[i], st.session_state.full_path[i+1]) for i in range(len(st.session_state.full_path)-1)) * 111000
+                    log_plan_complete(waypoint_count=len(st.session_state.full_path), length_m=length)
 
     if page == "规划":
         st.header("航线规划 - 多航点避障")
@@ -494,7 +556,6 @@ def main():
 
         with col1:
             st.markdown("#### 🗺️ 航点管理")
-
             # 起点
             st.markdown("**起点**")
             col_s = st.columns(2)
@@ -537,7 +598,6 @@ def main():
                 st.session_state.waypoints[-1] = [b_lng, b_lat]
 
             st.markdown("---")
-
             # 障碍物添加
             st.markdown("#### 🏗️ 新障碍物高度")
             st.session_state.pending_h = st.number_input("高度(米)", 1, 200, st.session_state.pending_h)
@@ -548,21 +608,32 @@ def main():
                                                  "height": st.session_state.pending_h})
                     st.success(f"已添加，共{len(st.session_state.obs)}个")
                     st.session_state.pending_poly = None
+                    # 自动重新规划
+                    obs_count = len(st.session_state.obs)
+                    log_plan_start(obs_count)
                     st.session_state.full_path = plan_full_path(st.session_state.waypoints,
                                                                   st.session_state.obs,
                                                                   st.session_state.alt,
                                                                   st.session_state.safe_rad,
                                                                   st.session_state.sel_strat)
+                    if st.session_state.full_path:
+                        length = sum(dist(st.session_state.full_path[i], st.session_state.full_path[i+1]) for i in range(len(st.session_state.full_path)-1)) * 111000
+                        log_plan_complete(waypoint_count=len(st.session_state.full_path), length_m=length)
                 else:
                     st.warning("请先在地图上画多边形")
 
             if st.button("🔄 重新规划路径"):
                 with st.spinner("规划全航线中..."):
+                    obs_count = len(st.session_state.obs)
+                    log_plan_start(obs_count)
                     st.session_state.full_path = plan_full_path(st.session_state.waypoints,
                                                                   st.session_state.obs,
                                                                   st.session_state.alt,
                                                                   st.session_state.safe_rad,
                                                                   st.session_state.sel_strat)
+                    if st.session_state.full_path:
+                        length = sum(dist(st.session_state.full_path[i], st.session_state.full_path[i+1]) for i in range(len(st.session_state.full_path)-1)) * 111000
+                        log_plan_complete(waypoint_count=len(st.session_state.full_path), length_m=length)
 
             st.markdown("#### ✈️ 飞行控制")
             if st.button("▶️ 开始飞行"):
@@ -573,6 +644,7 @@ def main():
                     st.session_state.running = True
                     st.session_state.hist = []
                     st.session_state.last_time = time.time()
+                    log_mission_start(st.session_state.waypoints, st.session_state.alt)
                     st.success("飞行开始，请切换至「监控」页面")
 
             if st.button("⏹️ 停止飞行"):
@@ -608,7 +680,6 @@ def main():
     elif page == "监控":
         st.header("📡 飞行实时画面 - 任务执行监控")
 
-        # 自动刷新（每3秒触发脚本重运行，无页面重载感）
         st_autorefresh(interval=HEARTBEAT_INTERVAL * 1000, key="monitor_autorefresh")
 
         # 控制按钮
@@ -622,6 +693,7 @@ def main():
                         st.session_state.hb.set_path(st.session_state.full_path, st.session_state.alt, st.session_state.drone_spd)
                         st.session_state.running = True
                         st.session_state.last_time = time.time()
+                        log_mission_start(st.session_state.waypoints, st.session_state.alt)
                 else:
                     st.session_state.hb.do_resume()
 
@@ -643,7 +715,7 @@ def main():
 
         st.markdown("---")
 
-        # 自动位置更新（基于实际经过的时间）
+        # 自动位置更新
         if st.session_state.running and not st.session_state.hb.is_paused:
             now = time.time()
             dt = min(now - st.session_state.last_time, HEARTBEAT_INTERVAL)
@@ -662,8 +734,6 @@ def main():
                     st.session_state.update_counter += 1
                 except Exception as e:
                     st.error(f"位置更新出错: {e}")
-                    # 可选：记录到 st.session_state 便于调试
-                    # 不中断页面继续运行
 
         # 获取最新心跳数据
         if st.session_state.hb.hist:
@@ -677,7 +747,6 @@ def main():
         current_wp_num = int(d.get('progress', 0) * total_waypoints) + 1 if total_waypoints > 0 else 0
         current_wp_num = min(current_wp_num, total_waypoints)
 
-        # 显示状态
         if st.session_state.running:
             if d.get('paused', False):
                 status_text = "⏸️ 已暂停"
@@ -688,14 +757,11 @@ def main():
         else:
             status_text = "⏹️ 已停止"
             status_color = "red"
-
         st.markdown(f"### 状态: <span style='color:{status_color}'>{status_text}</span>", unsafe_allow_html=True)
 
-        # 飞行进度
         st.markdown("### ✈️ 飞行进度")
         st.progress(d.get('progress', 0), text=f"进度: {d.get('progress', 0)*100:.1f}%")
 
-        # 飞行数据
         st.markdown("### 📊 实时飞行数据")
         col_a, col_b, col_c, col_d = st.columns(4)
         col_a.metric("🎯 当前航点", f"{current_wp_num}/{total_waypoints}" if total_waypoints > 0 else "0/0")
@@ -704,22 +770,14 @@ def main():
         col_c.metric("⏰ 已用时间", f"{int(elapsed//60):02d}:{int(elapsed%60):02d}")
         remaining = d.get('remaining_distance', 0)
         col_d.metric("📏 剩余距离", f"{remaining:.0f} m" if remaining >= 0 else "0 m")
-
         col_e, col_f = st.columns(2)
         col_e.metric("🕐 预计到达", d.get('remain', '00:00'))
         col_f.metric("🔋 电量模拟", f"{d.get('battery', 0)}%")
-
         st.markdown("---")
-
-        # 当前位置
         st.info(f"📍 当前位置: 经度 {d.get('lng', 0):.6f}, 纬度 {d.get('lat', 0):.6f} | 高度: {d.get('altitude', 50)}m")
-
         st.markdown("---")
 
-        # 实时飞行地图
         st.markdown("### 🗺️ 实时飞行地图")
-
-        # 确定地图中心
         if d.get('lat', 0) != 0:
             center = [d['lat'], d['lng']]
         elif st.session_state.waypoints:
@@ -727,47 +785,31 @@ def main():
         else:
             center = [SCHOOL_CENTER[1], SCHOOL_CENTER[0]]
 
-        # 创建地图
         m = folium.Map(location=center, zoom_start=17, tiles=VEC_URL, attr=ATTR)
-
-        # 添加障碍物
         for o in st.session_state.obs:
             coords = o.get('polygon', [])
             if len(coords) >= 3:
                 folium.Polygon([[c[1], c[0]] for c in coords], color='red', fill=True, fill_opacity=0.3,
                               popup=f"{o.get('name', '障碍物')}\n高度:{o.get('height', 20)}m").add_to(m)
-
-        # 添加完整航线
         if st.session_state.full_path and len(st.session_state.full_path) > 1:
             folium.PolyLine([[p[1], p[0]] for p in st.session_state.full_path], color='green', weight=3, opacity=0.8, 
                            popup="规划航线").add_to(m)
-
-        # 添加航点
         for i, wp in enumerate(st.session_state.waypoints):
             color = 'green' if i == 0 else ('red' if i == len(st.session_state.waypoints)-1 else 'blue')
             folium.Marker([wp[1], wp[0]], popup=f"航点{i+1}", icon=folium.Icon(color=color)).add_to(m)
-
-        # 添加历史轨迹
         if st.session_state.hist and len(st.session_state.hist) > 1:
             trail = [[p[1], p[0]] for p in st.session_state.hist[-50:] if len(p) == 2]
             if len(trail) > 1:
                 folium.PolyLine(trail, color='orange', weight=2, opacity=0.7, popup="历史轨迹").add_to(m)
-
-        # 添加无人机当前位置
         if d.get('lat', 0) != 0:
             folium.Marker([d['lat'], d['lng']], 
                          popup=f"📍 无人机\n高度:{d.get('altitude', 50)}m\n速度:{d.get('speed', 0)}m/s",
                          icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(m)
-
-            # 添加安全半径圆圈
             folium.Circle([d['lat'], d['lng']], radius=st.session_state.safe_rad,
                          color='blue', fill=True, fill_opacity=0.2, popup=f"安全区 {st.session_state.safe_rad}m").add_to(m)
-
         st_folium(m, width=1000, height=500, returned_objects=[])
 
         st.markdown("---")
-
-        # 飞行日志
         st.markdown("### 📋 飞行日志")
         if st.session_state.hb.hist:
             log_df = pd.DataFrame([{
@@ -780,30 +822,22 @@ def main():
                 "进度": f"{h['progress']*100:.1f}%"
             } for h in st.session_state.hb.hist[:10]])
             st.dataframe(log_df, use_container_width=True)
-
-        # 显示自动刷新状态
         st.info(f"🔄 监控页面每 {HEARTBEAT_INTERVAL} 秒自动刷新 | 位置更新次数: {st.session_state.update_counter}")
 
     elif page == "障碍物":
         st.header("🏗️ 障碍物管理")
         st.info(f"当前障碍物数量: {len(st.session_state.obs)}")
-
         for i, obs in enumerate(st.session_state.obs):
             col1, col2, col3 = st.columns([3, 1, 1])
             col1.write(f"{obs.get('name', f'障碍物{i+1}')} - 高度: {obs.get('height', 20)}m")
             if col3.button("删除", key=f"del_obs_{i}"):
                 st.session_state.obs.pop(i)
-
         if st.button("清空所有障碍物"):
             st.session_state.obs = []
-
         if st.button("💾 保存到缓存"):
             save_cache()
-
         if st.button("📂 从缓存加载"):
             load_cache()
-
-        # 显示障碍物地图
         st.markdown("### 🗺️ 障碍物分布图")
         m = folium.Map(location=[SCHOOL_CENTER[1], SCHOOL_CENTER[0]], zoom_start=16, tiles=VEC_URL, attr=ATTR)
         for o in st.session_state.obs:
@@ -814,6 +848,86 @@ def main():
         folium.Marker([A_DFT[1], A_DFT[0]], popup="起点", icon=folium.Icon(color='green')).add_to(m)
         folium.Marker([B_DFT[1], B_DFT[0]], popup="终点", icon=folium.Icon(color='red')).add_to(m)
         st_folium(m, width=700, height=500, returned_objects=[])
+
+    elif page == "通信链路":
+        st.header("🔗 通信链路拓扑与数据流")
+
+        # 模拟链路统计数值
+        if "comm_stats" not in st.session_state:
+            st.session_state.comm_stats = {
+                "gcs_to_obc": "正常",
+                "obc_to_fcu": "正常",
+                "delay": 25.0,
+                "loss": 0.1
+            }
+        # 每3秒自动刷新（使用st_autorefresh）
+        st_autorefresh(interval=HEARTBEAT_INTERVAL * 1000, key="comm_autorefresh")
+
+        # 动态更新统计（模拟微小波动）
+        st.session_state.comm_stats["delay"] = round(20 + random.uniform(-3, 10), 1)
+        st.session_state.comm_stats["loss"] = round(random.uniform(0.0, 0.2), 1)
+
+        # 拓扑图（用CSS + emoji模拟）
+        st.markdown("""
+        <style>
+        .topology {
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            margin: 20px 0;
+            font-family: monospace;
+        }
+        .node {
+            text-align: center;
+            background: #f0f2f6;
+            border-radius: 10px;
+            padding: 15px;
+            min-width: 150px;
+        }
+        .online { color: green; font-weight: bold; }
+        .line { font-size: 24px; margin: 0 10px; }
+        </style>
+        """, unsafe_allow_html=True)
+
+        col_topo1, col_topo2, col_topo3 = st.columns(3)
+        with col_topo1:
+            st.markdown("**GCS** 地面站")
+            st.code("192.168.1.100")
+            st.markdown("<span class='online'>● 在线</span>", unsafe_allow_html=True)
+        with col_topo2:
+            st.markdown("**UDP:14550** 已连接")
+            st.markdown("⬇️ ⬆️")
+            st.markdown("**OBC** 机载计算机")
+            st.code("Raspberry Pi 4")
+            st.markdown("<span class='online'>● 在线</span>", unsafe_allow_html=True)
+        with col_topo3:
+            st.markdown("**MAVLink** 已连接")
+            st.markdown("⬇️ ⬆️")
+            st.markdown("**FCU** 飞控")
+            st.code("PX4 / ArduPilot")
+            st.markdown("<span class='online'>● 在线</span>", unsafe_allow_html=True)
+
+        st.markdown("---")
+        st.subheader("链路统计")
+        stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
+        stats_col1.metric("GCS → OBC", st.session_state.comm_stats["gcs_to_obc"])
+        stats_col2.metric("OBC → FCU", st.session_state.comm_stats["obc_to_fcu"])
+        stats_col3.metric("延迟", f"{st.session_state.comm_stats['delay']} ms")
+        stats_col4.metric("丢包率", f"{st.session_state.comm_stats['loss']} %")
+
+        st.markdown("---")
+        st.subheader("通信日志")
+        st.markdown("#### 业务流程")
+        st.markdown("- **GCS → OBC → FCU**")
+        st.markdown("- **FCU → OBC → GCS**")
+
+        # 显示通信日志表格
+        if st.session_state.comm_logs:
+            log_df = pd.DataFrame(st.session_state.comm_logs)
+            log_df.rename(columns={"time": "时间", "direction": "方向", "message": "消息"}, inplace=True)
+            st.dataframe(log_df, use_container_width=True, height=400)
+        else:
+            st.info("暂无通信日志，请开始飞行或规划航线")
 
 if __name__ == "__main__":
     main()
