@@ -21,7 +21,7 @@ VEC_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&
 ATTR = "高德地图"
 CONFIG_FILE = "obstacle_config.json"
 BASE_SPEED_MPS = 5.0
-HEARTBEAT_INTERVAL = 0.5
+HEARTBEAT_INTERVAL = 3.0          # 监控页面自动刷新间隔（秒），从0.5改为3
 
 # ==================== 坐标转换 ====================
 def gcj2wgs(lng, lat):
@@ -259,7 +259,8 @@ class HeartbeatSim:
             self.last_update_time = current_time
             return self._hb(obstacles_gcj, safe_radius)
         
-        dt = min(current_time - self.last_update_time, 0.5)
+        # 关键修改：时间步长上限改为 HEARTBEAT_INTERVAL，而不是固定 0.5
+        dt = min(current_time - self.last_update_time, HEARTBEAT_INTERVAL)
         self.last_update_time = current_time
         
         if self.start_time:
@@ -623,7 +624,6 @@ def main():
         
         # 自动更新逻辑 - 使用 session_state 计数器触发刷新
         if st.session_state.running and not st.session_state.hb.is_paused:
-            # 每隔 HEARTBEAT_INTERVAL 秒更新一次位置
             current_time = time.time()
             if current_time - st.session_state.last_time >= HEARTBEAT_INTERVAL:
                 st.session_state.hb.update(st.session_state.obs, st.session_state.safe_rad)
