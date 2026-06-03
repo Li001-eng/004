@@ -207,8 +207,7 @@ def add_comm_log(direction: str, message: str, details: dict = None):
         "message": message,
         "details": details or {}
     }
-    st.session_state.comm_logs.insert(0, log_entry)  # 最新在上
-    # 保留最多200条
+    st.session_state.comm_logs.insert(0, log_entry)
     if len(st.session_state.comm_logs) > 200:
         st.session_state.comm_logs = st.session_state.comm_logs[:200]
 
@@ -230,7 +229,7 @@ class HeartbeatSim:
         self.elapsed = 0
         self.safety_violation = False
         self.last_update_time = None
-        self.last_reported_wp = -1   # 用于记录已报告过的航点序号
+        self.last_reported_wp = -1
 
     def set_path(self, path, alt, spd):
         self.path = [list(p) for p in path]
@@ -307,7 +306,6 @@ class HeartbeatSim:
             step_m = speed_mps * dt
             step_deg = step_m / 111000.0
 
-            # 记录到达新航点（idx 增加时）
             old_idx = self.idx
 
             if distance_to_target <= step_deg:
@@ -325,9 +323,9 @@ class HeartbeatSim:
                     self.pos = list(tar)
                     self.idx += 1
 
-            # 航点到达日志（仅当 idx 增加且不是最后终点时才记录，终点在 complete 时记录）
+            # 航点到达日志
             if self.idx > old_idx and self.idx <= len(self.path) - 1:
-                wp_number = self.idx  # 刚刚到达的航点序号（从1开始）
+                wp_number = self.idx
                 if wp_number != self.last_reported_wp:
                     self.last_reported_wp = wp_number
                     add_comm_log("FCU→OBC→GCS", f"WP_REACHED #{wp_number}",
@@ -337,7 +335,6 @@ class HeartbeatSim:
                 self.prog = min(1.0, self.trav / self.total)
 
             if self.idx >= len(self.path) - 1 and not self.sim:
-                # 任务完成
                 add_comm_log("FCU→OBC→GCS", "MISSION_COMPLETE",
                              {"final_position": self.pos, "total_distance": self.total})
         else:
@@ -471,7 +468,7 @@ def make_map(center, waypoints, obs, hist, full_path, maptype, rad, h, drone_pos
 
     return m
 
-# ==================== 通信页面组件 ====================
+# ==================== 通信页面组件（修复 KeyError 问题） ====================
 def show_communication_page():
     st.header("📡 通信链路监控与日志")
 
@@ -547,7 +544,6 @@ def show_communication_page():
 
     # 链路统计
     st.subheader("📊 链路统计")
-    # 从模拟器获取延迟和丢包率（如果有模拟器实例）
     if st.session_state.hb and st.session_state.hb.hist:
         last_hb = st.session_state.hb.hist[0]
         delay = last_hb.get('delay_ms', 25)
@@ -568,17 +564,21 @@ def show_communication_page():
     if 'comm_logs' not in st.session_state:
         st.session_state.comm_logs = []
 
-    # 显示日志表格
     if st.session_state.comm_logs:
         log_data = []
         for log in st.session_state.comm_logs:
+            # 安全获取字段，避免 KeyError
+            timestamp = log.get('timestamp', '')
+            direction = log.get('direction', '')
+            message = log.get('message', '')
+            details = log.get('details', {})
             details_str = ""
-            if log['details']:
-                details_str = " | ".join([f"{k}: {v}" for k, v in log['details'].items()])
+            if details:
+                details_str = " | ".join([f"{k}: {v}" for k, v in details.items()])
             log_data.append({
-                "时间": log['timestamp'],
-                "方向": log['direction'],
-                "消息": log['message'],
+                "时间": timestamp,
+                "方向": direction,
+                "消息": message,
                 "详情": details_str
             })
         df = pd.DataFrame(log_data)
@@ -648,6 +648,7 @@ def main():
 
         with col1:
             st.markdown("#### 🗺️ 航点管理")
+
             # 起点
             st.markdown("**起点**")
             col_s = st.columns(2)
@@ -840,7 +841,6 @@ def main():
         current_wp_num = int(d.get('progress', 0) * total_waypoints) + 1 if total_waypoints > 0 else 0
         current_wp_num = min(current_wp_num, total_waypoints)
 
-        # 状态显示
         if st.session_state.running:
             if d.get('paused', False):
                 status_text = "⏸️ 已暂停"
