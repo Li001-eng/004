@@ -193,11 +193,7 @@ def check_safety_radius(drone_pos, obstacles, flight_alt, safe_radius):
 
 # ==================== 通信日志管理 ====================
 def add_comm_log(direction: str, message: str, details: dict = None):
-    """添加通信日志条目
-    direction: "GCS→OBC", "OBC→FCU", "FCU→OBC", "OBC→GCS", "OBC内部"
-    message: 简短描述
-    details: 可选附加信息字典
-    """
+    """添加通信日志条目"""
     if 'comm_logs' not in st.session_state:
         st.session_state.comm_logs = []
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -211,7 +207,7 @@ def add_comm_log(direction: str, message: str, details: dict = None):
     if len(st.session_state.comm_logs) > 200:
         st.session_state.comm_logs = st.session_state.comm_logs[:200]
 
-# ==================== 心跳模拟器（增加通信日志） ====================
+# ==================== 心跳模拟器 ====================
 class HeartbeatSim:
     def __init__(self, start):
         self.hist = []
@@ -468,7 +464,7 @@ def make_map(center, waypoints, obs, hist, full_path, maptype, rad, h, drone_pos
 
     return m
 
-# ==================== 通信页面组件（修复 KeyError 问题） ====================
+# ==================== 通信页面组件 ====================
 def show_communication_page():
     st.header("📡 通信链路监控与日志")
 
@@ -567,7 +563,7 @@ def show_communication_page():
     if st.session_state.comm_logs:
         log_data = []
         for log in st.session_state.comm_logs:
-            # 安全获取字段，避免 KeyError
+            # 安全获取字段
             timestamp = log.get('timestamp', '')
             direction = log.get('direction', '')
             message = log.get('message', '')
@@ -585,6 +581,117 @@ def show_communication_page():
         st.dataframe(df, use_container_width=True)
     else:
         st.info("暂无通信日志，请开始飞行任务。")
+
+# ==================== 坐标转换页面 ====================
+def show_coordinate_conversion_page():
+    st.header("🌐 WGS-84 ↔ GCJ-02 坐标转换")
+
+    st.markdown("""
+    **说明**：
+    - WGS-84 是国际通用经纬度坐标系（GPS 原始坐标）。
+    - GCJ-02 是中国国测局加密坐标系（高德、腾讯、Google 中国等使用）。
+    - 本工具可双向转换。
+    """)
+
+    col_input, col_output = st.columns(2)
+
+    with col_input:
+        st.subheader("输入坐标")
+        coord_system = st.radio(
+            "选择输入坐标系",
+            ["WGS-84", "GCJ-02"],
+            index=0,
+            horizontal=True
+        )
+        lng = st.number_input("经度", value=118.7490, format="%.6f", step=0.000001)
+        lat = st.number_input("纬度", value=32.2340, format="%.6f", step=0.000001)
+
+        if st.button("🔄 转换", use_container_width=True, type="primary"):
+            if coord_system == "WGS-84":
+                # WGS84 -> GCJ02
+                gcj_lng, gcj_lat = wgs2gcj(lng, lat)
+                result = {
+                    "输入坐标系": "WGS-84",
+                    "输入经度": lng,
+                    "输入纬度": lat,
+                    "输出坐标系": "GCJ-02",
+                    "输出经度": gcj_lng,
+                    "输出纬度": gcj_lat
+                }
+                st.session_state.conversion_result = result
+            else:
+                # GCJ02 -> WGS84
+                wgs_lng, wgs_lat = gcj2wgs(lng, lat)
+                result = {
+                    "输入坐标系": "GCJ-02",
+                    "输入经度": lng,
+                    "输入纬度": lat,
+                    "输出坐标系": "WGS-84",
+                    "输出经度": wgs_lng,
+                    "输出纬度": wgs_lat
+                }
+                st.session_state.conversion_result = result
+
+    with col_output:
+        st.subheader("转换结果")
+        if 'conversion_result' in st.session_state and st.session_state.conversion_result:
+            res = st.session_state.conversion_result
+            st.success(f"✅ 转换成功")
+            st.metric("输入坐标系", res["输入坐标系"])
+            st.metric("输入坐标", f"({res['输入经度']:.6f}, {res['输入纬度']:.6f})")
+            st.metric("输出坐标系", res["输出坐标系"])
+            st.metric("输出坐标", f"({res['输出经度']:.6f}, {res['输出纬度']:.6f})")
+            # 显示在地图上
+            st.subheader("📍 位置预览")
+            center = [res['输出纬度'], res['输出经度']]
+            m = folium.Map(location=center, zoom_start=16, tiles=VEC_URL, attr=ATTR)
+            folium.Marker(center, popup=f"转换后坐标\n({res['输出经度']:.6f}, {res['输出纬度']:.6f})",
+                          icon=folium.Icon(color='red')).add_to(m)
+            folium_static(m, width=600, height=300)
+        else:
+            st.info("请输入坐标并点击转换按钮")
+
+    # 常用坐标预设（快速测试）
+    st.markdown("---")
+    st.subheader("📌 快速测试坐标")
+    col_preset1, col_preset2, col_preset3 = st.columns(3)
+    if col_preset1.button("天安门 (GCJ-02)", use_container_width=True):
+        st.session_state.conversion_result = None
+        st.session_state['test_lng'] = 116.397428
+        st.session_state['test_lat'] = 39.90923
+        # 转换到 WGS84
+        wgs_lng, wgs_lat = gcj2wgs(116.397428, 39.90923)
+        res = {
+            "输入坐标系": "GCJ-02",
+            "输入经度": 116.397428,
+            "输入纬度": 39.90923,
+            "输出坐标系": "WGS-84",
+            "输出经度": wgs_lng,
+            "输出纬度": wgs_lat
+        }
+        st.session_state.conversion_result = res
+    if col_preset2.button("上海东方明珠 (GCJ-02)", use_container_width=True):
+        wgs_lng, wgs_lat = gcj2wgs(121.499718, 31.239702)
+        res = {
+            "输入坐标系": "GCJ-02",
+            "输入经度": 121.499718,
+            "输入纬度": 31.239702,
+            "输出坐标系": "WGS-84",
+            "输出经度": wgs_lng,
+            "输出纬度": wgs_lat
+        }
+        st.session_state.conversion_result = res
+    if col_preset3.button("南京市中心 (WGS-84)", use_container_width=True):
+        gcj_lng, gcj_lat = wgs2gcj(118.783, 32.060)
+        res = {
+            "输入坐标系": "WGS-84",
+            "输入经度": 118.783,
+            "输入纬度": 32.060,
+            "输出坐标系": "GCJ-02",
+            "输出经度": gcj_lng,
+            "输出纬度": gcj_lat
+        }
+        st.session_state.conversion_result = res
 
 # ==================== 主程序 ====================
 def main():
@@ -609,10 +716,11 @@ def main():
     if 'new_wp_lat' not in st.session_state: st.session_state.new_wp_lat = A_DFT[1]
     if 'update_counter' not in st.session_state: st.session_state.update_counter = 0
     if 'comm_logs' not in st.session_state: st.session_state.comm_logs = []
+    if 'conversion_result' not in st.session_state: st.session_state.conversion_result = None
 
     with st.sidebar:
         st.header("控制面板")
-        page = st.radio("模块", ["规划", "监控", "障碍物", "通信"])
+        page = st.radio("模块", ["规划", "监控", "障碍物", "通信", "坐标转换"])
         map_type = "satellite" if st.radio("地图", ["卫星影像", "矢量街道"]) == "卫星影像" else "vector"
         st.markdown("---")
         st.subheader("无人机参数")
@@ -634,21 +742,18 @@ def main():
                                            st.session_state.safe_rad,
                                            st.session_state.sel_strat)
                 st.session_state.full_path = full_path
-                # 添加通信日志：航线规划完成
                 add_comm_log("OBC内部", "航线规划完成",
                              {"类型": "horizontal",
                               "航点数": len(full_path),
                               "路径长度(m)": round(sum(dist(full_path[i], full_path[i+1]) for i in range(len(full_path)-1)) * 111000, 1)})
 
     if page == "规划":
+        # ...（与原来完全相同，此处省略以节省篇幅，但实际代码中应保留全部）...
         st.header("航线规划 - 多航点避障")
         st.info("📝 点击地图📐画多边形→设置高度→「添加障碍物」；下方可添加/删除航点（起点和终点固定）")
-
         col1, col2 = st.columns([1, 1.5])
-
         with col1:
             st.markdown("#### 🗺️ 航点管理")
-
             # 起点
             st.markdown("**起点**")
             col_s = st.columns(2)
@@ -691,8 +796,6 @@ def main():
                 st.session_state.waypoints[-1] = [b_lng, b_lat]
 
             st.markdown("---")
-
-            # 障碍物添加
             st.markdown("#### 🏗️ 新障碍物高度")
             st.session_state.pending_h = st.number_input("高度(米)", 1, 200, st.session_state.pending_h)
             if st.button("➕ 添加障碍物"):
@@ -732,7 +835,6 @@ def main():
                     st.session_state.running = True
                     st.session_state.hist = []
                     st.session_state.last_time = time.time()
-                    # 添加导航目标日志
                     start_wp = st.session_state.waypoints[0]
                     end_wp = st.session_state.waypoints[-1]
                     add_comm_log("GCS→OBC", "导航目标",
@@ -772,12 +874,9 @@ def main():
             st.caption("图例：绿色=避障航线 红色=障碍物 橙色=安全区 | 蓝色旗帜=中间航点")
 
     elif page == "监控":
+        # ...（与原来完全相同，此处省略以节省篇幅）...
         st.header("📡 飞行实时画面 - 任务执行监控")
-
-        # 自动刷新
         st_autorefresh(interval=HEARTBEAT_INTERVAL * 1000, key="monitor_autorefresh")
-
-        # 控制按钮
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             if st.button("▶️ 开始/继续", use_container_width=True):
@@ -790,26 +889,20 @@ def main():
                         st.session_state.last_time = time.time()
                 else:
                     st.session_state.hb.do_resume()
-
         with col2:
             if st.button("⏸️ 暂停", use_container_width=True):
                 if st.session_state.running:
                     st.session_state.hb.do_pause()
-
         with col3:
             if st.button("⏹️ 停止", use_container_width=True):
                 st.session_state.running = False
                 st.session_state.hb.stop()
-
         with col4:
             if st.button("🔄 重置", use_container_width=True):
                 st.session_state.running = False
                 st.session_state.hb.reset()
                 st.session_state.hist = []
-
         st.markdown("---")
-
-        # 自动位置更新
         if st.session_state.running and not st.session_state.hb.is_paused:
             now = time.time()
             dt = min(now - st.session_state.last_time, HEARTBEAT_INTERVAL)
@@ -828,19 +921,15 @@ def main():
                     st.session_state.update_counter += 1
                 except Exception as e:
                     st.error(f"位置更新出错: {e}")
-
-        # 获取最新心跳数据
         if st.session_state.hb.hist:
             d = st.session_state.hb.hist[0]
         else:
             d = {"speed": 0, "progress": 0, "elapsed": 0, "remaining_distance": 0,
                  "remain": "00:00", "battery": 0, "lng": 0, "lat": 0, "paused": False,
                  "altitude": 50}
-
         total_waypoints = len(st.session_state.waypoints)
         current_wp_num = int(d.get('progress', 0) * total_waypoints) + 1 if total_waypoints > 0 else 0
         current_wp_num = min(current_wp_num, total_waypoints)
-
         if st.session_state.running:
             if d.get('paused', False):
                 status_text = "⏸️ 已暂停"
@@ -851,12 +940,9 @@ def main():
         else:
             status_text = "⏹️ 已停止"
             status_color = "red"
-
         st.markdown(f"### 状态: <span style='color:{status_color}'>{status_text}</span>", unsafe_allow_html=True)
-
         st.markdown("### ✈️ 飞行进度")
         st.progress(d.get('progress', 0), text=f"进度: {d.get('progress', 0)*100:.1f}%")
-
         st.markdown("### 📊 实时飞行数据")
         col_a, col_b, col_c, col_d = st.columns(4)
         col_a.metric("🎯 当前航点", f"{current_wp_num}/{total_waypoints}" if total_waypoints > 0 else "0/0")
@@ -865,14 +951,11 @@ def main():
         col_c.metric("⏰ 已用时间", f"{int(elapsed//60):02d}:{int(elapsed%60):02d}")
         remaining = d.get('remaining_distance', 0)
         col_d.metric("📏 剩余距离", f"{remaining:.0f} m" if remaining >= 0 else "0 m")
-
         col_e, col_f = st.columns(2)
         col_e.metric("🕐 预计到达", d.get('remain', '00:00'))
         col_f.metric("🔋 电量模拟", f"{d.get('battery', 0)}%")
-
         st.markdown("---")
         st.info(f"📍 当前位置: 经度 {d.get('lng', 0):.6f}, 纬度 {d.get('lat', 0):.6f} | 高度: {d.get('altitude', 50)}m")
-
         st.markdown("### 🗺️ 实时飞行地图")
         if d.get('lat', 0) != 0:
             center = [d['lat'], d['lng']]
@@ -880,7 +963,6 @@ def main():
             center = [st.session_state.waypoints[0][1], st.session_state.waypoints[0][0]]
         else:
             center = [SCHOOL_CENTER[1], SCHOOL_CENTER[0]]
-
         m = folium.Map(location=center, zoom_start=17, tiles=VEC_URL, attr=ATTR)
         for o in st.session_state.obs:
             coords = o.get('polygon', [])
@@ -904,7 +986,6 @@ def main():
             folium.Circle([d['lat'], d['lng']], radius=st.session_state.safe_rad,
                          color='blue', fill=True, fill_opacity=0.2, popup=f"安全区 {st.session_state.safe_rad}m").add_to(m)
         st_folium(m, width=1000, height=500, returned_objects=[])
-
         st.markdown("### 📋 飞行日志")
         if st.session_state.hb.hist:
             log_df = pd.DataFrame([{
@@ -917,28 +998,23 @@ def main():
                 "进度": f"{h['progress']*100:.1f}%"
             } for h in st.session_state.hb.hist[:10]])
             st.dataframe(log_df, use_container_width=True)
-
         st.info(f"🔄 监控页面每 {HEARTBEAT_INTERVAL} 秒自动刷新 | 位置更新次数: {st.session_state.update_counter}")
 
     elif page == "障碍物":
+        # ...（与原来完全相同，此处省略）...
         st.header("🏗️ 障碍物管理")
         st.info(f"当前障碍物数量: {len(st.session_state.obs)}")
-
         for i, obs in enumerate(st.session_state.obs):
             col1, col2, col3 = st.columns([3, 1, 1])
             col1.write(f"{obs.get('name', f'障碍物{i+1}')} - 高度: {obs.get('height', 20)}m")
             if col3.button("删除", key=f"del_obs_{i}"):
                 st.session_state.obs.pop(i)
-
         if st.button("清空所有障碍物"):
             st.session_state.obs = []
-
         if st.button("💾 保存到缓存"):
             save_cache()
-
         if st.button("📂 从缓存加载"):
             load_cache()
-
         st.markdown("### 🗺️ 障碍物分布图")
         m = folium.Map(location=[SCHOOL_CENTER[1], SCHOOL_CENTER[0]], zoom_start=16, tiles=VEC_URL, attr=ATTR)
         for o in st.session_state.obs:
@@ -952,6 +1028,9 @@ def main():
 
     elif page == "通信":
         show_communication_page()
+
+    elif page == "坐标转换":
+        show_coordinate_conversion_page()
 
 if __name__ == "__main__":
     main()
