@@ -10,130 +10,31 @@ import json
 import os
 from datetime import datetime
 import pandas as pd
-import threading
 from streamlit_autorefresh import st_autorefresh
 
 # ==================== 全局CSS美化 ====================
 st.set_page_config(page_title="无人机地面站系统", layout="wide", initial_sidebar_state="expanded")
 
-# 自定义CSS
 st.markdown("""
 <style>
-    /* 全局背景与字体 */
-    .main {
-        background: linear-gradient(135deg, #f5f7fa 0%, #e9edf5 100%);
-        padding: 20px;
-    }
-    .sidebar .sidebar-content {
-        background: linear-gradient(180deg, #1a2a3a 0%, #0d1b2a 100%);
-        color: white;
-    }
-    .sidebar .sidebar-content .stSelectbox, .sidebar .sidebar-content .stRadio, .sidebar .sidebar-content .stSlider {
-        color: white;
-    }
-    .sidebar .sidebar-content .stMarkdown {
-        color: #cbd5e1;
-    }
-    /* 卡片样式 */
-    .card {
-        background: white;
-        border-radius: 12px;
-        padding: 20px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-        margin-bottom: 16px;
-        transition: all 0.2s;
-    }
-    .card:hover {
-        box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-        transform: translateY(-2px);
-    }
-    /* 指标卡 */
-    .metric-card {
-        background: white;
-        border-radius: 10px;
-        padding: 15px;
-        text-align: center;
-        border-left: 4px solid #2c6b9e;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    }
-    .metric-card .label {
-        font-size: 14px;
-        color: #64748b;
-        font-weight: 500;
-    }
-    .metric-card .value {
-        font-size: 24px;
-        font-weight: 700;
-        color: #1e293b;
-    }
-    .metric-card .delta {
-        font-size: 13px;
-        color: #3b82f6;
-    }
-    /* 按钮风格 */
-    .stButton button {
-        border-radius: 8px;
-        font-weight: 500;
-        transition: all 0.15s;
-        background: linear-gradient(135deg, #2563eb, #1d4ed8);
-        color: white;
-        border: none;
-    }
-    .stButton button:hover {
-        transform: scale(1.02);
-        box-shadow: 0 4px 12px rgba(37,99,235,0.4);
-    }
-    .stButton button:active {
-        transform: scale(0.98);
-    }
-    /* 侧边栏导航 */
-    .nav-item {
-        padding: 10px 16px;
-        border-radius: 8px;
-        margin: 4px 0;
-        cursor: pointer;
-        transition: 0.15s;
-        font-weight: 500;
-        color: #94a3b8;
-    }
-    .nav-item.active {
-        background: rgba(37,99,235,0.2);
-        color: #ffffff;
-        border-left: 3px solid #3b82f6;
-    }
-    .nav-item:hover {
-        background: rgba(255,255,255,0.05);
-        color: #e2e8f0;
-    }
-    /* 进度条美化 */
-    .stProgress > div > div {
-        background: linear-gradient(90deg, #22c55e, #eab308, #ef4444);
-    }
-    /* 分隔线 */
-    hr {
-        border: 0;
-        height: 1px;
-        background: linear-gradient(to right, transparent, #64748b, transparent);
-        margin: 24px 0;
-    }
-    /* 状态标签 */
-    .status-badge {
-        display: inline-block;
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-weight: 600;
-        font-size: 14px;
-    }
+    .main { background: linear-gradient(135deg, #f5f7fa 0%, #e9edf5 100%); padding: 20px; }
+    .sidebar .sidebar-content { background: linear-gradient(180deg, #1a2a3a 0%, #0d1b2a 100%); color: white; }
+    .sidebar .sidebar-content .stMarkdown { color: #cbd5e1; }
+    .card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom: 16px; transition: 0.2s; }
+    .card:hover { box-shadow: 0 8px 24px rgba(0,0,0,0.12); transform: translateY(-2px); }
+    .metric-card { background: white; border-radius: 10px; padding: 15px; text-align: center; border-left: 4px solid #2c6b9e; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    .metric-card .label { font-size: 14px; color: #64748b; font-weight: 500; }
+    .metric-card .value { font-size: 24px; font-weight: 700; color: #1e293b; }
+    .stButton button { border-radius: 8px; font-weight: 500; transition: 0.15s; background: linear-gradient(135deg, #2563eb, #1d4ed8); color: white; border: none; }
+    .stButton button:hover { transform: scale(1.02); box-shadow: 0 4px 12px rgba(37,99,235,0.4); }
+    .status-badge { display: inline-block; padding: 4px 14px; border-radius: 20px; font-weight: 600; font-size: 14px; }
     .status-badge.green { background: #dcfce7; color: #166534; }
     .status-badge.orange { background: #fef3c7; color: #92400e; }
     .status-badge.red { background: #fee2e2; color: #991b1b; }
-    /* 表头 */
-    h1, h2, h3, h4 {
-        font-weight: 600;
-        letter-spacing: -0.01em;
-    }
-    h1 { color: #0f172a; }
-    h2 { color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; }
+    .mavlink-card { background: #f8fafc; border-radius: 8px; padding: 12px; border-left: 3px solid #3b82f6; margin: 4px 0; }
+    .mavlink-card .field { display: inline-block; margin-right: 16px; font-size: 13px; }
+    .mavlink-card .field-name { color: #475569; font-weight: 500; }
+    .mavlink-card .field-value { color: #0f172a; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -330,7 +231,133 @@ def add_comm_log(direction: str, message: str, details: dict = None):
     if len(st.session_state.comm_logs) > 200:
         st.session_state.comm_logs = st.session_state.comm_logs[:200]
 
-# ==================== 心跳模拟器 ====================
+# ==================== MAVLink 消息生成（新增） ====================
+MAVLINK_MESSAGE_TYPES = [
+    "HEARTBEAT",
+    "SYS_STATUS",
+    "GLOBAL_POSITION_INT",
+    "ATTITUDE",
+    "VFR_HUD",
+    "GPS_RAW_INT",
+    "SCALED_IMU",
+    "POWER_STATUS"
+]
+
+def generate_mavlink_messages(heartbeat_data):
+    """根据心跳数据生成模拟的 MAVLink 消息字典"""
+    messages = {}
+    # 基础数据
+    lat = heartbeat_data.get('lat', 0.0)
+    lng = heartbeat_data.get('lng', 0.0)
+    alt = heartbeat_data.get('altitude', 50)
+    speed = heartbeat_data.get('speed', 0)
+    battery = heartbeat_data.get('battery', 100)
+    voltage = heartbeat_data.get('voltage', 22.2)
+    satellites = heartbeat_data.get('satellites', 8)
+    progress = heartbeat_data.get('progress', 0)
+    elapsed = heartbeat_data.get('elapsed', 0)
+    simulating = heartbeat_data.get('simulating', False)
+    
+    # 1. HEARTBEAT
+    messages["HEARTBEAT"] = {
+        "type": "MAV_TYPE_QUADROTOR",
+        "autopilot": "MAV_AUTOPILOT_PX4",
+        "base_mode": 0b11110000,
+        "custom_mode": 0,
+        "system_status": "MAV_STATE_ACTIVE" if simulating else "MAV_STATE_STANDBY",
+        "mavlink_version": 2
+    }
+    
+    # 2. SYS_STATUS
+    messages["SYS_STATUS"] = {
+        "onboard_control_sensors_present": 0x0000,
+        "onboard_control_sensors_enabled": 0x0000,
+        "onboard_control_sensors_health": 0x0000,
+        "load": 500,  # 0-1000
+        "voltage_battery": voltage * 1000,  # mV
+        "current_battery": 10.0 + random.uniform(-2, 2),
+        "battery_remaining": battery,
+        "drop_rate_comm": 0.0,
+        "errors_comm": 0,
+        "errors_count1": 0,
+        "errors_count2": 0,
+        "errors_count3": 0,
+        "errors_count4": 0
+    }
+    
+    # 3. GLOBAL_POSITION_INT
+    messages["GLOBAL_POSITION_INT"] = {
+        "time_boot_ms": int(elapsed * 1000),
+        "lat": int(lat * 1e7),
+        "lon": int(lng * 1e7),
+        "alt": int(alt * 1000),
+        "relative_alt": int((alt - 50) * 1000),
+        "vx": int(speed * 100),
+        "vy": 0,
+        "vz": 0,
+        "hdg": int(45.0)  # 航向角度
+    }
+    
+    # 4. ATTITUDE
+    messages["ATTITUDE"] = {
+        "time_boot_ms": int(elapsed * 1000),
+        "roll": 0.0 + random.uniform(-0.05, 0.05),
+        "pitch": 0.0 + random.uniform(-0.05, 0.05),
+        "yaw": 0.8 + random.uniform(-0.1, 0.1),
+        "rollspeed": 0.0,
+        "pitchspeed": 0.0,
+        "yawspeed": 0.0
+    }
+    
+    # 5. VFR_HUD
+    messages["VFR_HUD"] = {
+        "airspeed": speed,
+        "groundspeed": speed,
+        "alt": alt,
+        "climb": 0.0,
+        "heading": 45,
+        "throttle": int(50 + progress * 40)
+    }
+    
+    # 6. GPS_RAW_INT
+    messages["GPS_RAW_INT"] = {
+        "time_usec": int(elapsed * 1e6),
+        "fix_type": 3,  # 3D fix
+        "satellites_visible": satellites,
+        "lat": int(lat * 1e7),
+        "lon": int(lng * 1e7),
+        "alt": int(alt * 1000),
+        "eph": 0.5,
+        "epv": 0.8,
+        "vel": speed * 100,
+        "cog": 4500,
+        "fix_type": 3
+    }
+    
+    # 7. SCALED_IMU
+    messages["SCALED_IMU"] = {
+        "time_boot_ms": int(elapsed * 1000),
+        "xacc": 0,
+        "yacc": 0,
+        "zacc": -980,  # 重力加速度
+        "xgyro": 0,
+        "ygyro": 0,
+        "zgyro": 0,
+        "xmag": 300,
+        "ymag": 200,
+        "zmag": 500
+    }
+    
+    # 8. POWER_STATUS
+    messages["POWER_STATUS"] = {
+        "Vcc": int(voltage * 1000),
+        "Vservo": 5000,
+        "flags": 0
+    }
+    
+    return messages
+
+# ==================== 心跳模拟器（增强 MAVLink） ====================
 class HeartbeatSim:
     def __init__(self, start):
         self.hist = []
@@ -502,7 +529,7 @@ class HeartbeatSim:
         loss = round(random.uniform(0, 0.2), 1) if self.sim else 0
         arrived = not self.sim and self.prog >= 1.0
 
-        return {
+        hb = {
             "timestamp": datetime.now().strftime("%H:%M:%S"),
             "lng": self.pos[0],
             "lat": self.pos[1],
@@ -526,6 +553,9 @@ class HeartbeatSim:
             "safety_violation": self.safety_violation,
             "remaining_distance": remaining_dist
         }
+        # 附加 MAVLink 消息（生成后存入历史，但只保留最新一组）
+        hb['mavlink_messages'] = generate_mavlink_messages(hb)
+        return hb
 
 # ==================== 障碍物文件IO ====================
 def save_obstacles_to_file():
@@ -732,6 +762,9 @@ def main():
     if 'update_counter' not in st.session_state: st.session_state.update_counter = 0
     if 'comm_logs' not in st.session_state: st.session_state.comm_logs = []
     if 'conversion_result' not in st.session_state: st.session_state.conversion_result = None
+    if 'mavlink_mode' not in st.session_state: st.session_state.mavlink_mode = "模拟"  # 模拟 / 真实
+    if 'selected_mavlink_msg' not in st.session_state:
+        st.session_state.selected_mavlink_msg = MAVLINK_MESSAGE_TYPES[0]
 
     # ---------- 侧边栏 ----------
     with st.sidebar:
@@ -930,7 +963,7 @@ def main():
         else:
             d = {"speed": 0, "progress": 0, "elapsed": 0, "remaining_distance": 0,
                  "remain": "00:00", "battery": 0, "lng": 0, "lat": 0, "paused": False,
-                 "altitude": 50}
+                 "altitude": 50, "mavlink_messages": {}}
         total_waypoints = len(st.session_state.waypoints)
         current_wp_num = int(d.get('progress', 0) * total_waypoints) + 1 if total_waypoints > 0 else 0
         current_wp_num = min(current_wp_num, total_waypoints)
@@ -959,6 +992,37 @@ def main():
         col_e.metric("🕐 预计到达", d.get('remain', '00:00'))
         col_f.metric("🔋 电量模拟", f"{d.get('battery', 0)}%")
         st.markdown("---")
+
+        # ==================== MAVLink 接口区域（新增） ====================
+        st.markdown("### 📡 MAVLink 消息监控")
+        col_mode, col_type = st.columns([1, 2])
+        with col_mode:
+            mav_mode = st.selectbox("MAVLink 模式", ["模拟", "真实"], index=0 if st.session_state.mavlink_mode == "模拟" else 1)
+            st.session_state.mavlink_mode = mav_mode
+            if mav_mode == "真实":
+                st.info("⚠️ 真实模式需通过串口/UDP 接入 MAVLink 数据，当前为模拟数据展示。")
+        with col_type:
+            msg_type = st.selectbox("选择消息类型", MAVLINK_MESSAGE_TYPES,
+                                    index=MAVLINK_MESSAGE_TYPES.index(st.session_state.selected_mavlink_msg))
+            st.session_state.selected_mavlink_msg = msg_type
+
+        # 显示选中的 MAVLink 消息内容
+        mav_msgs = d.get('mavlink_messages', {})
+        if mav_msgs and msg_type in mav_msgs:
+            msg = mav_msgs[msg_type]
+            st.markdown(f"<div class='mavlink-card'><strong>{msg_type}</strong></div>", unsafe_allow_html=True)
+            # 以表格形式显示字段
+            field_data = []
+            for k, v in msg.items():
+                if isinstance(v, float):
+                    v = f"{v:.3f}"
+                field_data.append({"字段": k, "值": v})
+            if field_data:
+                st.dataframe(pd.DataFrame(field_data), use_container_width=True, height=min(300, len(field_data)*35+38))
+        else:
+            st.info("等待 MAVLink 数据... 请先开始飞行任务。")
+        st.markdown("---")
+        # 原有监控信息
         st.info(f"📍 当前位置: 经度 {d.get('lng', 0):.6f}, 纬度 {d.get('lat', 0):.6f} | 高度: {d.get('altitude', 50)}m")
         st.markdown("### 🗺️ 实时飞行地图")
         if d.get('lat', 0) != 0:
