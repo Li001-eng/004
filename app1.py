@@ -13,6 +13,130 @@ import pandas as pd
 import threading
 from streamlit_autorefresh import st_autorefresh
 
+# ==================== 全局CSS美化 ====================
+st.set_page_config(page_title="无人机地面站系统", layout="wide", initial_sidebar_state="expanded")
+
+# 自定义CSS
+st.markdown("""
+<style>
+    /* 全局背景与字体 */
+    .main {
+        background: linear-gradient(135deg, #f5f7fa 0%, #e9edf5 100%);
+        padding: 20px;
+    }
+    .sidebar .sidebar-content {
+        background: linear-gradient(180deg, #1a2a3a 0%, #0d1b2a 100%);
+        color: white;
+    }
+    .sidebar .sidebar-content .stSelectbox, .sidebar .sidebar-content .stRadio, .sidebar .sidebar-content .stSlider {
+        color: white;
+    }
+    .sidebar .sidebar-content .stMarkdown {
+        color: #cbd5e1;
+    }
+    /* 卡片样式 */
+    .card {
+        background: white;
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        margin-bottom: 16px;
+        transition: all 0.2s;
+    }
+    .card:hover {
+        box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+        transform: translateY(-2px);
+    }
+    /* 指标卡 */
+    .metric-card {
+        background: white;
+        border-radius: 10px;
+        padding: 15px;
+        text-align: center;
+        border-left: 4px solid #2c6b9e;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    .metric-card .label {
+        font-size: 14px;
+        color: #64748b;
+        font-weight: 500;
+    }
+    .metric-card .value {
+        font-size: 24px;
+        font-weight: 700;
+        color: #1e293b;
+    }
+    .metric-card .delta {
+        font-size: 13px;
+        color: #3b82f6;
+    }
+    /* 按钮风格 */
+    .stButton button {
+        border-radius: 8px;
+        font-weight: 500;
+        transition: all 0.15s;
+        background: linear-gradient(135deg, #2563eb, #1d4ed8);
+        color: white;
+        border: none;
+    }
+    .stButton button:hover {
+        transform: scale(1.02);
+        box-shadow: 0 4px 12px rgba(37,99,235,0.4);
+    }
+    .stButton button:active {
+        transform: scale(0.98);
+    }
+    /* 侧边栏导航 */
+    .nav-item {
+        padding: 10px 16px;
+        border-radius: 8px;
+        margin: 4px 0;
+        cursor: pointer;
+        transition: 0.15s;
+        font-weight: 500;
+        color: #94a3b8;
+    }
+    .nav-item.active {
+        background: rgba(37,99,235,0.2);
+        color: #ffffff;
+        border-left: 3px solid #3b82f6;
+    }
+    .nav-item:hover {
+        background: rgba(255,255,255,0.05);
+        color: #e2e8f0;
+    }
+    /* 进度条美化 */
+    .stProgress > div > div {
+        background: linear-gradient(90deg, #22c55e, #eab308, #ef4444);
+    }
+    /* 分隔线 */
+    hr {
+        border: 0;
+        height: 1px;
+        background: linear-gradient(to right, transparent, #64748b, transparent);
+        margin: 24px 0;
+    }
+    /* 状态标签 */
+    .status-badge {
+        display: inline-block;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-weight: 600;
+        font-size: 14px;
+    }
+    .status-badge.green { background: #dcfce7; color: #166534; }
+    .status-badge.orange { background: #fef3c7; color: #92400e; }
+    .status-badge.red { background: #fee2e2; color: #991b1b; }
+    /* 表头 */
+    h1, h2, h3, h4 {
+        font-weight: 600;
+        letter-spacing: -0.01em;
+    }
+    h1 { color: #0f172a; }
+    h2 { color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; }
+</style>
+""", unsafe_allow_html=True)
+
 # ==================== 配置常量 ====================
 SCHOOL_CENTER = [118.7490, 32.2340]
 A_DFT = [118.746956, 32.232945]
@@ -20,11 +144,11 @@ B_DFT = [118.751589, 32.235204]
 SAT_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
 VEC_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
 ATTR = "高德地图"
-CONFIG_FILE = "obstacle_config.json"   # 障碍物配置文件
+CONFIG_FILE = "obstacle_config.json"
 BASE_SPEED_MPS = 5.0
 HEARTBEAT_INTERVAL = 3
 
-# ==================== 坐标转换 ====================
+# ==================== 坐标转换（保持不变） ====================
 def gcj2wgs(lng, lat):
     if abs(lng) < 72 or abs(lng) > 138 or abs(lat) < 0.8 or abs(lat) > 56: return lng, lat
     dlat = -100 + 2*lng + 3*lat + 0.2*lat*lat + 0.1*lng*lat + 0.2*math.sqrt(abs(lng))
@@ -59,7 +183,7 @@ def wgs2gcj(lng, lat):
     dlng = dlng * 180 / (6378245.0/sqrtmagic*math.cos(rad)*math.pi)
     return lng+dlng, lat+dlat
 
-# ==================== 几何辅助 ====================
+# ==================== 几何辅助（保持不变） ====================
 def dist(p1, p2):
     return math.hypot(p1[0]-p2[0], p1[1]-p2[1])
 
@@ -108,7 +232,7 @@ def path_safe(p1,p2,obs,rad_m,h):
         if seg_to_poly_dist(p1,p2,poly) < rad_m-0.1: return False
     return True
 
-# ==================== 绕行生成 ====================
+# ==================== 绕行生成（保持不变） ====================
 def gen_bypass(A,B,obs,rad_m,h,side='left'):
     avoid = [o for o in obs if should_avoid(o,h)]
     if not avoid: return [A,B]
@@ -403,9 +527,8 @@ class HeartbeatSim:
             "remaining_distance": remaining_dist
         }
 
-# ==================== 障碍物缓存（JSON 文件） ====================
+# ==================== 障碍物文件IO ====================
 def save_obstacles_to_file():
-    """保存障碍物到 JSON 文件"""
     try:
         data = {
             'obstacles': st.session_state.obs,
@@ -420,7 +543,6 @@ def save_obstacles_to_file():
         st.error(f"保存失败: {e}")
 
 def load_obstacles_from_file():
-    """从 JSON 文件加载障碍物"""
     if not os.path.exists(CONFIG_FILE):
         st.warning("配置文件不存在，请先保存")
         return False
@@ -429,7 +551,6 @@ def load_obstacles_from_file():
             data = json.load(f)
             obstacles = data.get('obstacles', [])
             st.session_state.obs = obstacles
-            # 重新规划路径
             st.session_state.full_path = plan_full_path(st.session_state.waypoints,
                                                           st.session_state.obs,
                                                           st.session_state.alt,
@@ -484,76 +605,18 @@ def make_map(center, waypoints, obs, hist, full_path, maptype, rad, h, drone_pos
 
     return m
 
-# ==================== 通信页面组件 ====================
+# ==================== 通信页面 ====================
 def show_communication_page():
     st.header("📡 通信链路监控与日志")
     st.markdown("""
-    <style>
-    .topology {
-        display: flex;
-        justify-content: space-around;
-        align-items: center;
-        background: #f0f2f6;
-        padding: 20px;
-        border-radius: 10px;
-        margin: 10px 0;
-    }
-    .node {
-        text-align: center;
-        background: white;
-        padding: 10px;
-        border-radius: 8px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        min-width: 150px;
-    }
-    .node h4 { margin: 0; color: #1f77b4; }
-    .node p { margin: 5px 0; font-size: 12px; }
-    .arrow { font-size: 24px; color: #2ca02c; }
-    .status { color: green; font-weight: bold; }
-    </style>
+    <div class="card" style="display:flex; justify-content:space-around; align-items:center; padding:20px;">
+        <div style="text-align:center;"><h4>🖥️ GCS</h4><p>192.168.1.100</p><p style="color:green;">● 已连接</p></div>
+        <div style="font-size:28px; color:#3b82f6;">➡️</div>
+        <div style="text-align:center;"><h4>💻 OBC</h4><p>Raspberry Pi 4</p><p style="color:green;">● 已连接</p></div>
+        <div style="font-size:28px; color:#3b82f6;">⬇️</div>
+        <div style="text-align:center;"><h4>⚙️ FCU</h4><p>PX4 / ArduPilot</p><p style="color:green;">● 已连接</p></div>
+    </div>
     """, unsafe_allow_html=True)
-
-    col1, col2, col3 = st.columns([1, 0.2, 1])
-    with col1:
-        st.markdown("""
-        <div class="node">
-            <h4>🖥️ GCS 地面站</h4>
-            <p>192.168.1.100</p>
-            <p>UDP:14550 <span class="status">● 已连接</span></p>
-        </div>
-        """, unsafe_allow_html=True)
-    with col2:
-        st.markdown("<div class='arrow'>➡️</div>", unsafe_allow_html=True)
-    with col3:
-        st.markdown("""
-        <div class="node">
-            <h4>💻 OBC 机载计算机</h4>
-            <p>Raspberry Pi 4</p>
-            <p>MAVLink <span class="status">● 已连接</span></p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("<div style='text-align:center; margin:10px 0;'>⬇️</div>", unsafe_allow_html=True)
-
-    col4, col5, col6 = st.columns([1, 0.2, 1])
-    with col4:
-        st.markdown("""
-        <div class="node">
-            <h4>⚙️ FCU 飞控</h4>
-            <p>PX4 / ArduPilot</p>
-            <p>MAVLink <span class="status">● 已连接</span></p>
-        </div>
-        """, unsafe_allow_html=True)
-    with col5:
-        st.markdown("<div class='arrow'>⬆️⬇️</div>", unsafe_allow_html=True)
-    with col6:
-        st.markdown("""
-        <div class="node">
-            <h4>🔁 双向通信</h4>
-            <p>GCS ↔ OBC ↔ FCU</p>
-        </div>
-        """, unsafe_allow_html=True)
-
     st.markdown("---")
     st.subheader("📊 链路统计")
     if st.session_state.hb and st.session_state.hb.hist:
@@ -568,27 +631,16 @@ def show_communication_page():
     col_b.metric("OBC → FCU", "正常", delta="")
     col_c.metric("延迟", f"~{delay} ms", delta="")
     col_d.metric("丢包率", f"{loss}%", delta="")
-
     st.markdown("---")
     st.subheader("📜 通信日志")
-    if 'comm_logs' not in st.session_state:
-        st.session_state.comm_logs = []
-
-    if st.session_state.comm_logs:
+    if 'comm_logs' in st.session_state and st.session_state.comm_logs:
         log_data = []
-        for log in st.session_state.comm_logs:
-            timestamp = log.get('timestamp', '')
-            direction = log.get('direction', '')
-            message = log.get('message', '')
-            details = log.get('details', {})
-            details_str = ""
-            if details:
-                details_str = " | ".join([f"{k}: {v}" for k, v in details.items()])
+        for log in st.session_state.comm_logs[:20]:
             log_data.append({
-                "时间": timestamp,
-                "方向": direction,
-                "消息": message,
-                "详情": details_str
+                "时间": log.get('timestamp', ''),
+                "方向": log.get('direction', ''),
+                "消息": log.get('message', ''),
+                "详情": " | ".join([f"{k}: {v}" for k, v in log.get('details', {}).items()])
             })
         df = pd.DataFrame(log_data)
         st.dataframe(df, use_container_width=True)
@@ -599,50 +651,32 @@ def show_communication_page():
 def show_coordinate_conversion_page():
     st.header("🌐 WGS-84 ↔ GCJ-02 坐标转换")
     st.markdown("""
-    **说明**：
-    - WGS-84 是国际通用经纬度坐标系（GPS 原始坐标）。
-    - GCJ-02 是中国国测局加密坐标系（高德、腾讯、Google 中国等使用）。
-    - 本工具可双向转换。
-    """)
+    <div class="card">
+        <p><strong>说明</strong>：WGS-84 是国际通用经纬度坐标系（GPS 原始坐标）。GCJ-02 是中国国测局加密坐标系（高德、腾讯、Google 中国等使用）。本工具可双向转换。</p>
+    </div>
+    """, unsafe_allow_html=True)
     col_input, col_output = st.columns(2)
     with col_input:
         st.subheader("输入坐标")
-        coord_system = st.radio(
-            "选择输入坐标系",
-            ["WGS-84", "GCJ-02"],
-            index=0,
-            horizontal=True
-        )
+        coord_system = st.radio("选择输入坐标系", ["WGS-84", "GCJ-02"], index=0, horizontal=True)
         lng = st.number_input("经度", value=118.7490, format="%.6f", step=0.000001)
         lat = st.number_input("纬度", value=32.2340, format="%.6f", step=0.000001)
-        if st.button("🔄 转换", use_container_width=True, type="primary"):
+        if st.button("🔄 转换", use_container_width=True):
             if coord_system == "WGS-84":
                 gcj_lng, gcj_lat = wgs2gcj(lng, lat)
-                result = {
-                    "输入坐标系": "WGS-84",
-                    "输入经度": lng,
-                    "输入纬度": lat,
-                    "输出坐标系": "GCJ-02",
-                    "输出经度": gcj_lng,
-                    "输出纬度": gcj_lat
-                }
+                result = {"输入坐标系": "WGS-84", "输入经度": lng, "输入纬度": lat,
+                          "输出坐标系": "GCJ-02", "输出经度": gcj_lng, "输出纬度": gcj_lat}
                 st.session_state.conversion_result = result
             else:
                 wgs_lng, wgs_lat = gcj2wgs(lng, lat)
-                result = {
-                    "输入坐标系": "GCJ-02",
-                    "输入经度": lng,
-                    "输入纬度": lat,
-                    "输出坐标系": "WGS-84",
-                    "输出经度": wgs_lng,
-                    "输出纬度": wgs_lat
-                }
+                result = {"输入坐标系": "GCJ-02", "输入经度": lng, "输入纬度": lat,
+                          "输出坐标系": "WGS-84", "输出经度": wgs_lng, "输出纬度": wgs_lat}
                 st.session_state.conversion_result = result
     with col_output:
         st.subheader("转换结果")
         if 'conversion_result' in st.session_state and st.session_state.conversion_result:
             res = st.session_state.conversion_result
-            st.success(f"✅ 转换成功")
+            st.success("✅ 转换成功")
             st.metric("输入坐标系", res["输入坐标系"])
             st.metric("输入坐标", f"({res['输入经度']:.6f}, {res['输入纬度']:.6f})")
             st.metric("输出坐标系", res["输出坐标系"])
@@ -660,43 +694,25 @@ def show_coordinate_conversion_page():
     col_preset1, col_preset2, col_preset3 = st.columns(3)
     if col_preset1.button("天安门 (GCJ-02)", use_container_width=True):
         wgs_lng, wgs_lat = gcj2wgs(116.397428, 39.90923)
-        res = {
-            "输入坐标系": "GCJ-02",
-            "输入经度": 116.397428,
-            "输入纬度": 39.90923,
-            "输出坐标系": "WGS-84",
-            "输出经度": wgs_lng,
-            "输出纬度": wgs_lat
+        st.session_state.conversion_result = {
+            "输入坐标系": "GCJ-02", "输入经度": 116.397428, "输入纬度": 39.90923,
+            "输出坐标系": "WGS-84", "输出经度": wgs_lng, "输出纬度": wgs_lat
         }
-        st.session_state.conversion_result = res
     if col_preset2.button("上海东方明珠 (GCJ-02)", use_container_width=True):
         wgs_lng, wgs_lat = gcj2wgs(121.499718, 31.239702)
-        res = {
-            "输入坐标系": "GCJ-02",
-            "输入经度": 121.499718,
-            "输入纬度": 31.239702,
-            "输出坐标系": "WGS-84",
-            "输出经度": wgs_lng,
-            "输出纬度": wgs_lat
+        st.session_state.conversion_result = {
+            "输入坐标系": "GCJ-02", "输入经度": 121.499718, "输入纬度": 31.239702,
+            "输出坐标系": "WGS-84", "输出经度": wgs_lng, "输出纬度": wgs_lat
         }
-        st.session_state.conversion_result = res
     if col_preset3.button("南京市中心 (WGS-84)", use_container_width=True):
         gcj_lng, gcj_lat = wgs2gcj(118.783, 32.060)
-        res = {
-            "输入坐标系": "WGS-84",
-            "输入经度": 118.783,
-            "输入纬度": 32.060,
-            "输出坐标系": "GCJ-02",
-            "输出经度": gcj_lng,
-            "输出纬度": gcj_lat
+        st.session_state.conversion_result = {
+            "输入坐标系": "WGS-84", "输入经度": 118.783, "输入纬度": 32.060,
+            "输出坐标系": "GCJ-02", "输出经度": gcj_lng, "输出纬度": gcj_lat
         }
-        st.session_state.conversion_result = res
 
 # ==================== 主程序 ====================
 def main():
-    st.set_page_config(layout="wide")
-    st.title("🏫 无人机地面站系统 - 航点飞行（最终版）")
-
     # 初始化状态
     if 'waypoints' not in st.session_state: st.session_state.waypoints = [A_DFT[:], B_DFT[:]]
     if 'obs' not in st.session_state: st.session_state.obs = []
@@ -717,26 +733,26 @@ def main():
     if 'comm_logs' not in st.session_state: st.session_state.comm_logs = []
     if 'conversion_result' not in st.session_state: st.session_state.conversion_result = None
 
+    # ---------- 侧边栏 ----------
     with st.sidebar:
-        st.header("控制面板")
-        # 显示配置文件路径
-        st.caption(f"📁 障碍物配置文件: `{os.path.abspath(CONFIG_FILE)}`")
+        st.markdown("## 🛸 控制面板")
+        st.caption(f"📁 障碍物文件: `{os.path.abspath(CONFIG_FILE)}`")
         st.markdown("---")
-        page = st.radio("模块", ["规划", "监控", "障碍物", "通信", "坐标转换"])
-        map_type = "satellite" if st.radio("地图", ["卫星影像", "矢量街道"]) == "卫星影像" else "vector"
+        page = st.radio("导航", ["🗺️ 规划", "📡 监控", "🏗️ 障碍物", "📡 通信", "🌐 坐标转换"],
+                        index=0,
+                        format_func=lambda x: x.split()[1] if ' ' in x else x)
         st.markdown("---")
-        st.subheader("无人机参数")
+        st.markdown("### ⚙️ 无人机参数")
         st.session_state.drone_spd = st.slider("速度系数", 10, 100, st.session_state.drone_spd)
         st.session_state.safe_rad = st.number_input("安全半径(米)", 1, 30, st.session_state.safe_rad)
         st.session_state.alt = st.number_input("飞行高度(米)", 0, 200, st.session_state.alt)
         st.markdown("---")
-        st.subheader("绕行策略")
+        st.markdown("### 🔄 绕行策略")
         strat = st.radio("避障方式", ["最佳航线", "向左绕行", "向右绕行"])
         strat_map = {"最佳航线": "best", "向左绕行": "left", "向右绕行": "right"}
         st.session_state.sel_strat = strat_map[strat]
-        st.info(f"障碍物: {len(st.session_state.obs)}")
-
-        if st.button("刷新规划", use_container_width=True):
+        st.info(f"🧱 障碍物: {len(st.session_state.obs)} 个")
+        if st.button("🔄 刷新规划", use_container_width=True):
             with st.spinner("规划全航线中..."):
                 full_path = plan_full_path(st.session_state.waypoints,
                                            st.session_state.obs,
@@ -748,107 +764,98 @@ def main():
                              {"类型": "horizontal",
                               "航点数": len(full_path),
                               "路径长度(m)": round(sum(dist(full_path[i], full_path[i+1]) for i in range(len(full_path)-1)) * 111000, 1)})
+                st.rerun()
 
-    if page == "规划":
-        st.header("航线规划 - 多航点避障")
+    # ---------- 页面路由 ----------
+    if page == "🗺️ 规划":
+        st.header("🗺️ 航线规划 - 多航点避障")
         st.info("📝 点击地图📐画多边形→设置高度→「添加障碍物」；下方可添加/删除航点（起点和终点固定）")
         col1, col2 = st.columns([1, 1.5])
         with col1:
-            st.markdown("#### 🗺️ 航点管理")
-            # 起点
-            st.markdown("**起点**")
-            col_s = st.columns(2)
-            with col_s[0]:
-                a_lat = st.number_input("纬度", value=st.session_state.waypoints[0][1], format="%.6f", key="a_lat")
-            with col_s[1]:
-                a_lng = st.number_input("经度", value=st.session_state.waypoints[0][0], format="%.6f", key="a_lng")
-            if st.button("更新起点"):
-                st.session_state.waypoints[0] = [a_lng, a_lat]
-
-            st.markdown("**中间航点**")
-            if len(st.session_state.waypoints) > 2:
-                for i in range(1, len(st.session_state.waypoints)-1):
-                    col_wp = st.columns([3, 1])
-                    col_wp[0].write(f"航点{i}: ({st.session_state.waypoints[i][0]:.6f}, {st.session_state.waypoints[i][1]:.6f})")
-                    if col_wp[1].button("删除", key=f"del_wp_{i}"):
-                        st.session_state.waypoints.pop(i)
-            else:
-                st.write("暂无中间航点")
-
-            st.markdown("**添加新航点**")
-            col_add = st.columns(2)
-            with col_add[0]:
-                new_lng = st.number_input("经度", value=st.session_state.new_wp_lng, format="%.6f", key="new_lng")
-            with col_add[1]:
-                new_lat = st.number_input("纬度", value=st.session_state.new_wp_lat, format="%.6f", key="new_lat")
-            if st.button("➕ 添加航点"):
-                st.session_state.waypoints.insert(-1, [new_lng, new_lat])
-
-            st.markdown("**终点**")
-            col_e = st.columns(2)
-            with col_e[0]:
-                b_lat = st.number_input("纬度", value=st.session_state.waypoints[-1][1], format="%.6f", key="b_lat")
-            with col_e[1]:
-                b_lng = st.number_input("经度", value=st.session_state.waypoints[-1][0], format="%.6f", key="b_lng")
-            if st.button("更新终点"):
-                st.session_state.waypoints[-1] = [b_lng, b_lat]
-
-            st.markdown("---")
-            st.markdown("#### 🏗️ 新障碍物高度")
-            st.session_state.pending_h = st.number_input("高度(米)", 1, 200, st.session_state.pending_h)
-            if st.button("➕ 添加障碍物"):
-                if st.session_state.pending_poly and len(st.session_state.pending_poly) >= 3:
-                    st.session_state.obs.append({"name": f"建筑物{len(st.session_state.obs)+1}",
-                                                 "polygon": st.session_state.pending_poly,
-                                                 "height": st.session_state.pending_h})
-                    st.success(f"已添加，共{len(st.session_state.obs)}个")
-                    st.session_state.pending_poly = None
-                    st.session_state.full_path = plan_full_path(st.session_state.waypoints,
-                                                                  st.session_state.obs,
-                                                                  st.session_state.alt,
-                                                                  st.session_state.safe_rad,
-                                                                  st.session_state.sel_strat)
+            with st.expander("🗺️ 航点管理", expanded=True):
+                st.markdown("**起点**")
+                col_s = st.columns(2)
+                with col_s[0]:
+                    a_lat = st.number_input("纬度", value=st.session_state.waypoints[0][1], format="%.6f", key="a_lat")
+                with col_s[1]:
+                    a_lng = st.number_input("经度", value=st.session_state.waypoints[0][0], format="%.6f", key="a_lng")
+                if st.button("更新起点"):
+                    st.session_state.waypoints[0] = [a_lng, a_lat]
+                st.markdown("**中间航点**")
+                if len(st.session_state.waypoints) > 2:
+                    for i in range(1, len(st.session_state.waypoints)-1):
+                        col_wp = st.columns([3, 1])
+                        col_wp[0].write(f"航点{i}: ({st.session_state.waypoints[i][0]:.6f}, {st.session_state.waypoints[i][1]:.6f})")
+                        if col_wp[1].button("删除", key=f"del_wp_{i}"):
+                            st.session_state.waypoints.pop(i)
                 else:
-                    st.warning("请先在地图上画多边形")
-
-            if st.button("🔄 重新规划路径"):
-                with st.spinner("规划全航线中..."):
-                    full_path = plan_full_path(st.session_state.waypoints,
-                                               st.session_state.obs,
-                                               st.session_state.alt,
-                                               st.session_state.safe_rad,
-                                               st.session_state.sel_strat)
-                    st.session_state.full_path = full_path
-                    add_comm_log("OBC内部", "航线规划完成",
-                                 {"类型": "horizontal",
-                                  "航点数": len(full_path),
-                                  "路径长度(m)": round(sum(dist(full_path[i], full_path[i+1]) for i in range(len(full_path)-1)) * 111000, 1)})
-
-            st.markdown("#### ✈️ 飞行控制")
-            if st.button("▶️ 开始飞行"):
-                if st.session_state.full_path is None or len(st.session_state.full_path) < 2:
-                    st.warning("请先点击「刷新规划」生成完整路径")
-                else:
-                    st.session_state.hb.set_path(st.session_state.full_path, st.session_state.alt, st.session_state.drone_spd)
-                    st.session_state.running = True
-                    st.session_state.hist = []
-                    st.session_state.last_time = time.time()
-                    start_wp = st.session_state.waypoints[0]
-                    end_wp = st.session_state.waypoints[-1]
-                    add_comm_log("GCS→OBC", "导航目标",
-                                 {"起点": f"({start_wp[1]:.6f}, {start_wp[0]:.6f})",
-                                  "终点": f"({end_wp[1]:.6f}, {end_wp[0]:.6f})",
-                                  "目标高度(m)": st.session_state.alt})
-                    st.success("飞行开始，请切换至「监控」页面")
-
-            if st.button("⏹️ 停止飞行"):
-                st.session_state.running = False
-                st.session_state.hb.stop()
-
-            st.caption(f"航线共{len(st.session_state.waypoints)}个航点")
-            if st.session_state.full_path:
-                st.caption(f"完整路径含{len(st.session_state.full_path)}个航段点")
-
+                    st.write("暂无中间航点")
+                st.markdown("**添加新航点**")
+                col_add = st.columns(2)
+                with col_add[0]:
+                    new_lng = st.number_input("经度", value=st.session_state.new_wp_lng, format="%.6f", key="new_lng")
+                with col_add[1]:
+                    new_lat = st.number_input("纬度", value=st.session_state.new_wp_lat, format="%.6f", key="new_lat")
+                if st.button("➕ 添加航点"):
+                    st.session_state.waypoints.insert(-1, [new_lng, new_lat])
+                st.markdown("**终点**")
+                col_e = st.columns(2)
+                with col_e[0]:
+                    b_lat = st.number_input("纬度", value=st.session_state.waypoints[-1][1], format="%.6f", key="b_lat")
+                with col_e[1]:
+                    b_lng = st.number_input("经度", value=st.session_state.waypoints[-1][0], format="%.6f", key="b_lng")
+                if st.button("更新终点"):
+                    st.session_state.waypoints[-1] = [b_lng, b_lat]
+            with st.expander("🏗️ 添加障碍物", expanded=True):
+                st.number_input("高度(米)", 1, 200, st.session_state.pending_h, key="pending_h_input")
+                if st.button("➕ 添加障碍物"):
+                    if st.session_state.pending_poly and len(st.session_state.pending_poly) >= 3:
+                        st.session_state.obs.append({"name": f"建筑物{len(st.session_state.obs)+1}",
+                                                     "polygon": st.session_state.pending_poly,
+                                                     "height": st.session_state.pending_h})
+                        st.success(f"已添加，共{len(st.session_state.obs)}个")
+                        st.session_state.pending_poly = None
+                        st.session_state.full_path = plan_full_path(st.session_state.waypoints,
+                                                                      st.session_state.obs,
+                                                                      st.session_state.alt,
+                                                                      st.session_state.safe_rad,
+                                                                      st.session_state.sel_strat)
+                    else:
+                        st.warning("请先在地图上画多边形")
+                if st.button("🔄 重新规划路径"):
+                    with st.spinner("规划全航线中..."):
+                        full_path = plan_full_path(st.session_state.waypoints,
+                                                   st.session_state.obs,
+                                                   st.session_state.alt,
+                                                   st.session_state.safe_rad,
+                                                   st.session_state.sel_strat)
+                        st.session_state.full_path = full_path
+                        add_comm_log("OBC内部", "航线规划完成",
+                                     {"类型": "horizontal",
+                                      "航点数": len(full_path),
+                                      "路径长度(m)": round(sum(dist(full_path[i], full_path[i+1]) for i in range(len(full_path)-1)) * 111000, 1)})
+            with st.expander("✈️ 飞行控制", expanded=True):
+                if st.button("▶️ 开始飞行", use_container_width=True):
+                    if st.session_state.full_path is None or len(st.session_state.full_path) < 2:
+                        st.warning("请先点击「刷新规划」生成完整路径")
+                    else:
+                        st.session_state.hb.set_path(st.session_state.full_path, st.session_state.alt, st.session_state.drone_spd)
+                        st.session_state.running = True
+                        st.session_state.hist = []
+                        st.session_state.last_time = time.time()
+                        start_wp = st.session_state.waypoints[0]
+                        end_wp = st.session_state.waypoints[-1]
+                        add_comm_log("GCS→OBC", "导航目标",
+                                     {"起点": f"({start_wp[1]:.6f}, {start_wp[0]:.6f})",
+                                      "终点": f"({end_wp[1]:.6f}, {end_wp[0]:.6f})",
+                                      "目标高度(m)": st.session_state.alt})
+                        st.success("飞行开始，请切换至「监控」页面")
+                if st.button("⏹️ 停止飞行", use_container_width=True):
+                    st.session_state.running = False
+                    st.session_state.hb.stop()
+                st.caption(f"航线共{len(st.session_state.waypoints)}个航点")
+                if st.session_state.full_path:
+                    st.caption(f"完整路径含{len(st.session_state.full_path)}个航段点")
         with col2:
             center = st.session_state.waypoints[0] or SCHOOL_CENTER
             if st.session_state.full_path is None:
@@ -859,7 +866,7 @@ def main():
                                                               st.session_state.sel_strat)
             drone_pos = st.session_state.hb.pos if st.session_state.running else None
             m = make_map(center, st.session_state.waypoints, st.session_state.obs, st.session_state.hist,
-                        st.session_state.full_path, map_type,
+                        st.session_state.full_path, "satellite",
                         st.session_state.safe_rad, st.session_state.alt, drone_pos)
             output = st_folium(m, width=700, height=550, returned_objects=["last_active_drawing"])
             if output and output.get("last_active_drawing"):
@@ -871,7 +878,7 @@ def main():
                         st.success("已捕获多边形，请设置高度后点「添加障碍物」")
             st.caption("图例：绿色=避障航线 红色=障碍物 橙色=安全区 | 蓝色旗帜=中间航点")
 
-    elif page == "监控":
+    elif page == "📡 监控":
         st.header("📡 飞行实时画面 - 任务执行监控")
         st_autorefresh(interval=HEARTBEAT_INTERVAL * 1000, key="monitor_autorefresh")
         col1, col2, col3, col4 = st.columns(4)
@@ -937,7 +944,7 @@ def main():
         else:
             status_text = "⏹️ 已停止"
             status_color = "red"
-        st.markdown(f"### 状态: <span style='color:{status_color}'>{status_text}</span>", unsafe_allow_html=True)
+        st.markdown(f"### 状态: <span class='status-badge {status_color}'>{status_text}</span>", unsafe_allow_html=True)
         st.markdown("### ✈️ 飞行进度")
         st.progress(d.get('progress', 0), text=f"进度: {d.get('progress', 0)*100:.1f}%")
         st.markdown("### 📊 实时飞行数据")
@@ -997,12 +1004,10 @@ def main():
             st.dataframe(log_df, use_container_width=True)
         st.info(f"🔄 监控页面每 {HEARTBEAT_INTERVAL} 秒自动刷新 | 位置更新次数: {st.session_state.update_counter}")
 
-    elif page == "障碍物":
+    elif page == "🏗️ 障碍物":
         st.header("🏗️ 障碍物管理")
         st.info(f"当前障碍物数量: {len(st.session_state.obs)}")
         st.caption(f"📁 配置文件路径: `{os.path.abspath(CONFIG_FILE)}`")
-
-        # 保存/加载/下载按钮
         col1, col2, col3 = st.columns(3)
         with col1:
             if st.button("💾 保存到文件", use_container_width=True):
@@ -1014,18 +1019,10 @@ def main():
             if os.path.exists(CONFIG_FILE):
                 with open(CONFIG_FILE, 'rb') as f:
                     file_data = f.read()
-                st.download_button(
-                    label="📥 下载配置文件",
-                    data=file_data,
-                    file_name="obstacle_config.json",
-                    mime="application/json",
-                    use_container_width=True
-                )
+                st.download_button("📥 下载配置文件", data=file_data, file_name="obstacle_config.json", mime="application/json", use_container_width=True)
             else:
                 st.button("📥 下载配置文件", use_container_width=True, disabled=True)
-
         st.markdown("---")
-        # 显示当前障碍物列表
         if st.session_state.obs:
             for i, obs in enumerate(st.session_state.obs):
                 col_a, col_b, col_c = st.columns([3, 1, 1])
@@ -1034,10 +1031,8 @@ def main():
                     st.session_state.obs.pop(i)
         else:
             st.write("暂无障碍物")
-
         if st.button("清空所有障碍物"):
             st.session_state.obs = []
-
         st.markdown("### 🗺️ 障碍物分布图")
         m = folium.Map(location=[SCHOOL_CENTER[1], SCHOOL_CENTER[0]], zoom_start=16, tiles=VEC_URL, attr=ATTR)
         for o in st.session_state.obs:
@@ -1049,10 +1044,10 @@ def main():
         folium.Marker([B_DFT[1], B_DFT[0]], popup="终点", icon=folium.Icon(color='red')).add_to(m)
         st_folium(m, width=700, height=500, returned_objects=[])
 
-    elif page == "通信":
+    elif page == "📡 通信":
         show_communication_page()
 
-    elif page == "坐标转换":
+    elif page == "🌐 坐标转换":
         show_coordinate_conversion_page()
 
 if __name__ == "__main__":
