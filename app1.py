@@ -20,7 +20,7 @@ B_DFT = [118.751589, 32.235204]
 SAT_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
 VEC_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
 ATTR = "高德地图"
-CONFIG_FILE = "obstacle_config.json"
+CONFIG_FILE = "obstacle_config.json"   # JSON 文件名
 BASE_SPEED_MPS = 5.0
 HEARTBEAT_INTERVAL = 3
 
@@ -193,7 +193,6 @@ def check_safety_radius(drone_pos, obstacles, flight_alt, safe_radius):
 
 # ==================== 通信日志管理 ====================
 def add_comm_log(direction: str, message: str, details: dict = None):
-    """添加通信日志条目"""
     if 'comm_logs' not in st.session_state:
         st.session_state.comm_logs = []
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -276,7 +275,6 @@ class HeartbeatSim:
         if not self.sim or self.is_paused:
             return self._hb(obstacles_gcj, safe_radius)
 
-        # 类型安全
         if not isinstance(self.pos, list):
             self.pos = list(self.pos)
         if len(self.pos) != 2:
@@ -319,7 +317,6 @@ class HeartbeatSim:
                     self.pos = list(tar)
                     self.idx += 1
 
-            # 航点到达日志
             if self.idx > old_idx and self.idx <= len(self.path) - 1:
                 wp_number = self.idx
                 if wp_number != self.last_reported_wp:
@@ -406,17 +403,53 @@ class HeartbeatSim:
             "remaining_distance": remaining_dist
         }
 
-# ==================== 障碍物缓存 ====================
+# ==================== 障碍物持久化 (JSON 文件) ====================
+def save_obstacles_to_file():
+    """将障碍物保存到 JSON 文件"""
+    try:
+        data = {
+            "obstacles": st.session_state.obs,
+            "count": len(st.session_state.obs),
+            "save_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "version": "v13.1"
+        }
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        st.success(f"✅ 已保存 {len(st.session_state.obs)} 个障碍物到 {CONFIG_FILE}")
+    except Exception as e:
+        st.error(f"保存失败: {e}")
+
+def load_obstacles_from_file():
+    """从 JSON 文件加载障碍物"""
+    if not os.path.exists(CONFIG_FILE):
+        st.warning(f"⚠️ 文件 {CONFIG_FILE} 不存在")
+        return False
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            loaded = data.get('obstacles', [])
+            # 兼容旧数据，确保每个障碍物有 height 字段
+            for obs in loaded:
+                if 'height' not in obs:
+                    obs['height'] = 20
+            st.session_state.obs = loaded
+        st.success(f"✅ 已从 {CONFIG_FILE} 加载 {len(loaded)} 个障碍物")
+        return True
+    except Exception as e:
+        st.error(f"加载失败: {e}")
+        return False
+
+# ==================== 缓存（内存备份） ====================
 def save_cache():
     if 'saved' not in st.session_state: st.session_state.saved = []
     import copy
     st.session_state.saved = copy.deepcopy(st.session_state.obs)
-    st.success(f"保存 {len(st.session_state.obs)} 个障碍物")
+    st.success(f"保存 {len(st.session_state.obs)} 个障碍物到缓存")
 
 def load_cache():
     if 'saved' in st.session_state and st.session_state.saved:
         st.session_state.obs = st.session_state.saved
-        st.success(f"加载 {len(st.session_state.obs)} 个障碍物")
+        st.success(f"加载 {len(st.session_state.obs)} 个障碍物从缓存")
         return True
     st.warning("无缓存")
     return False
@@ -467,8 +500,6 @@ def make_map(center, waypoints, obs, hist, full_path, maptype, rad, h, drone_pos
 # ==================== 通信页面组件 ====================
 def show_communication_page():
     st.header("📡 通信链路监控与日志")
-
-    # 拓扑图 (使用HTML/CSS模拟)
     st.markdown("""
     <style>
     .topology {
@@ -538,7 +569,6 @@ def show_communication_page():
 
     st.markdown("---")
 
-    # 链路统计
     st.subheader("📊 链路统计")
     if st.session_state.hb and st.session_state.hb.hist:
         last_hb = st.session_state.hb.hist[0]
@@ -555,7 +585,6 @@ def show_communication_page():
 
     st.markdown("---")
 
-    # 通信日志
     st.subheader("📜 通信日志")
     if 'comm_logs' not in st.session_state:
         st.session_state.comm_logs = []
@@ -563,7 +592,6 @@ def show_communication_page():
     if st.session_state.comm_logs:
         log_data = []
         for log in st.session_state.comm_logs:
-            # 安全获取字段
             timestamp = log.get('timestamp', '')
             direction = log.get('direction', '')
             message = log.get('message', '')
@@ -585,7 +613,6 @@ def show_communication_page():
 # ==================== 坐标转换页面 ====================
 def show_coordinate_conversion_page():
     st.header("🌐 WGS-84 ↔ GCJ-02 坐标转换")
-
     st.markdown("""
     **说明**：
     - WGS-84 是国际通用经纬度坐标系（GPS 原始坐标）。
@@ -608,7 +635,6 @@ def show_coordinate_conversion_page():
 
         if st.button("🔄 转换", use_container_width=True, type="primary"):
             if coord_system == "WGS-84":
-                # WGS84 -> GCJ02
                 gcj_lng, gcj_lat = wgs2gcj(lng, lat)
                 result = {
                     "输入坐标系": "WGS-84",
@@ -620,7 +646,6 @@ def show_coordinate_conversion_page():
                 }
                 st.session_state.conversion_result = result
             else:
-                # GCJ02 -> WGS84
                 wgs_lng, wgs_lat = gcj2wgs(lng, lat)
                 result = {
                     "输入坐标系": "GCJ-02",
@@ -641,7 +666,6 @@ def show_coordinate_conversion_page():
             st.metric("输入坐标", f"({res['输入经度']:.6f}, {res['输入纬度']:.6f})")
             st.metric("输出坐标系", res["输出坐标系"])
             st.metric("输出坐标", f"({res['输出经度']:.6f}, {res['输出纬度']:.6f})")
-            # 显示在地图上
             st.subheader("📍 位置预览")
             center = [res['输出纬度'], res['输出经度']]
             m = folium.Map(location=center, zoom_start=16, tiles=VEC_URL, attr=ATTR)
@@ -651,15 +675,11 @@ def show_coordinate_conversion_page():
         else:
             st.info("请输入坐标并点击转换按钮")
 
-    # 常用坐标预设（快速测试）
     st.markdown("---")
     st.subheader("📌 快速测试坐标")
     col_preset1, col_preset2, col_preset3 = st.columns(3)
     if col_preset1.button("天安门 (GCJ-02)", use_container_width=True):
         st.session_state.conversion_result = None
-        st.session_state['test_lng'] = 116.397428
-        st.session_state['test_lat'] = 39.90923
-        # 转换到 WGS84
         wgs_lng, wgs_lat = gcj2wgs(116.397428, 39.90923)
         res = {
             "输入坐标系": "GCJ-02",
@@ -748,12 +768,14 @@ def main():
                               "路径长度(m)": round(sum(dist(full_path[i], full_path[i+1]) for i in range(len(full_path)-1)) * 111000, 1)})
 
     if page == "规划":
-        # ...（与原来完全相同，此处省略以节省篇幅，但实际代码中应保留全部）...
         st.header("航线规划 - 多航点避障")
         st.info("📝 点击地图📐画多边形→设置高度→「添加障碍物」；下方可添加/删除航点（起点和终点固定）")
+
         col1, col2 = st.columns([1, 1.5])
+
         with col1:
             st.markdown("#### 🗺️ 航点管理")
+
             # 起点
             st.markdown("**起点**")
             col_s = st.columns(2)
@@ -796,6 +818,8 @@ def main():
                 st.session_state.waypoints[-1] = [b_lng, b_lat]
 
             st.markdown("---")
+
+            # 障碍物添加
             st.markdown("#### 🏗️ 新障碍物高度")
             st.session_state.pending_h = st.number_input("高度(米)", 1, 200, st.session_state.pending_h)
             if st.button("➕ 添加障碍物"):
@@ -874,9 +898,9 @@ def main():
             st.caption("图例：绿色=避障航线 红色=障碍物 橙色=安全区 | 蓝色旗帜=中间航点")
 
     elif page == "监控":
-        # ...（与原来完全相同，此处省略以节省篇幅）...
         st.header("📡 飞行实时画面 - 任务执行监控")
         st_autorefresh(interval=HEARTBEAT_INTERVAL * 1000, key="monitor_autorefresh")
+
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             if st.button("▶️ 开始/继续", use_container_width=True):
@@ -902,7 +926,9 @@ def main():
                 st.session_state.running = False
                 st.session_state.hb.reset()
                 st.session_state.hist = []
+
         st.markdown("---")
+
         if st.session_state.running and not st.session_state.hb.is_paused:
             now = time.time()
             dt = min(now - st.session_state.last_time, HEARTBEAT_INTERVAL)
@@ -921,15 +947,18 @@ def main():
                     st.session_state.update_counter += 1
                 except Exception as e:
                     st.error(f"位置更新出错: {e}")
+
         if st.session_state.hb.hist:
             d = st.session_state.hb.hist[0]
         else:
             d = {"speed": 0, "progress": 0, "elapsed": 0, "remaining_distance": 0,
                  "remain": "00:00", "battery": 0, "lng": 0, "lat": 0, "paused": False,
                  "altitude": 50}
+
         total_waypoints = len(st.session_state.waypoints)
         current_wp_num = int(d.get('progress', 0) * total_waypoints) + 1 if total_waypoints > 0 else 0
         current_wp_num = min(current_wp_num, total_waypoints)
+
         if st.session_state.running:
             if d.get('paused', False):
                 status_text = "⏸️ 已暂停"
@@ -941,8 +970,10 @@ def main():
             status_text = "⏹️ 已停止"
             status_color = "red"
         st.markdown(f"### 状态: <span style='color:{status_color}'>{status_text}</span>", unsafe_allow_html=True)
+
         st.markdown("### ✈️ 飞行进度")
         st.progress(d.get('progress', 0), text=f"进度: {d.get('progress', 0)*100:.1f}%")
+
         st.markdown("### 📊 实时飞行数据")
         col_a, col_b, col_c, col_d = st.columns(4)
         col_a.metric("🎯 当前航点", f"{current_wp_num}/{total_waypoints}" if total_waypoints > 0 else "0/0")
@@ -951,11 +982,14 @@ def main():
         col_c.metric("⏰ 已用时间", f"{int(elapsed//60):02d}:{int(elapsed%60):02d}")
         remaining = d.get('remaining_distance', 0)
         col_d.metric("📏 剩余距离", f"{remaining:.0f} m" if remaining >= 0 else "0 m")
+
         col_e, col_f = st.columns(2)
         col_e.metric("🕐 预计到达", d.get('remain', '00:00'))
         col_f.metric("🔋 电量模拟", f"{d.get('battery', 0)}%")
+
         st.markdown("---")
         st.info(f"📍 当前位置: 经度 {d.get('lng', 0):.6f}, 纬度 {d.get('lat', 0):.6f} | 高度: {d.get('altitude', 50)}m")
+
         st.markdown("### 🗺️ 实时飞行地图")
         if d.get('lat', 0) != 0:
             center = [d['lat'], d['lng']]
@@ -963,6 +997,7 @@ def main():
             center = [st.session_state.waypoints[0][1], st.session_state.waypoints[0][0]]
         else:
             center = [SCHOOL_CENTER[1], SCHOOL_CENTER[0]]
+
         m = folium.Map(location=center, zoom_start=17, tiles=VEC_URL, attr=ATTR)
         for o in st.session_state.obs:
             coords = o.get('polygon', [])
@@ -986,6 +1021,7 @@ def main():
             folium.Circle([d['lat'], d['lng']], radius=st.session_state.safe_rad,
                          color='blue', fill=True, fill_opacity=0.2, popup=f"安全区 {st.session_state.safe_rad}m").add_to(m)
         st_folium(m, width=1000, height=500, returned_objects=[])
+
         st.markdown("### 📋 飞行日志")
         if st.session_state.hb.hist:
             log_df = pd.DataFrame([{
@@ -998,23 +1034,63 @@ def main():
                 "进度": f"{h['progress']*100:.1f}%"
             } for h in st.session_state.hb.hist[:10]])
             st.dataframe(log_df, use_container_width=True)
+
         st.info(f"🔄 监控页面每 {HEARTBEAT_INTERVAL} 秒自动刷新 | 位置更新次数: {st.session_state.update_counter}")
 
     elif page == "障碍物":
-        # ...（与原来完全相同，此处省略）...
         st.header("🏗️ 障碍物管理")
         st.info(f"当前障碍物数量: {len(st.session_state.obs)}")
+
+        col_btn1, col_btn2, col_btn3, col_btn4, col_btn5 = st.columns(5)
+        with col_btn1:
+            if st.button("💾 保存到文件", use_container_width=True):
+                save_obstacles_to_file()
+        with col_btn2:
+            if st.button("📂 从文件加载", use_container_width=True):
+                load_obstacles_from_file()
+                # 重新规划路径
+                if st.session_state.obs:
+                    st.session_state.full_path = plan_full_path(st.session_state.waypoints,
+                                                                  st.session_state.obs,
+                                                                  st.session_state.alt,
+                                                                  st.session_state.safe_rad,
+                                                                  st.session_state.sel_strat)
+                    st.rerun()
+        with col_btn3:
+            if st.button("💾 保存到缓存", use_container_width=True):
+                save_cache()
+        with col_btn4:
+            if st.button("📂 从缓存加载", use_container_width=True):
+                if load_cache():
+                    st.session_state.full_path = plan_full_path(st.session_state.waypoints,
+                                                                  st.session_state.obs,
+                                                                  st.session_state.alt,
+                                                                  st.session_state.safe_rad,
+                                                                  st.session_state.sel_strat)
+                    st.rerun()
+        with col_btn5:
+            if st.button("🗑️ 清空所有障碍物", use_container_width=True):
+                st.session_state.obs = []
+                st.session_state.full_path = plan_full_path(st.session_state.waypoints,
+                                                              st.session_state.obs,
+                                                              st.session_state.alt,
+                                                              st.session_state.safe_rad,
+                                                              st.session_state.sel_strat)
+                st.rerun()
+
+        st.markdown("---")
         for i, obs in enumerate(st.session_state.obs):
             col1, col2, col3 = st.columns([3, 1, 1])
             col1.write(f"{obs.get('name', f'障碍物{i+1}')} - 高度: {obs.get('height', 20)}m")
             if col3.button("删除", key=f"del_obs_{i}"):
                 st.session_state.obs.pop(i)
-        if st.button("清空所有障碍物"):
-            st.session_state.obs = []
-        if st.button("💾 保存到缓存"):
-            save_cache()
-        if st.button("📂 从缓存加载"):
-            load_cache()
+                st.session_state.full_path = plan_full_path(st.session_state.waypoints,
+                                                              st.session_state.obs,
+                                                              st.session_state.alt,
+                                                              st.session_state.safe_rad,
+                                                              st.session_state.sel_strat)
+                st.rerun()
+
         st.markdown("### 🗺️ 障碍物分布图")
         m = folium.Map(location=[SCHOOL_CENTER[1], SCHOOL_CENTER[0]], zoom_start=16, tiles=VEC_URL, attr=ATTR)
         for o in st.session_state.obs:
